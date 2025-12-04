@@ -11,20 +11,15 @@ import {
   MapPin,
   Heart,
   Loader,
-  Calendar,
-  CheckCircle,
-  XCircle,
 } from 'lucide-react';
 
 import type { RootState } from '../store/store';
-import { 
-  useGetAllvehicleQuery
-} from '../features/api/VehiclesApi';
-import { 
-  useCreateNewBookingMutation 
-} from '../features/api/BookingsApi';
-import type { Vehicle } from '../types/Types';
-import type { CreateBookingRequest } from '../types/Types';
+import * as
+ 
+  VehicleApi
+from '../features/api/VehiclesApi';
+import { useCreateNewBookingMutation } from '../features/api/BookingsApi';
+import type { Vehicle,Booking } from '../types/Types';
 import NavBar from "../components/NavBar"
 
 const OurCars: React.FC = () => {
@@ -37,15 +32,12 @@ const OurCars: React.FC = () => {
     isLoading, 
     error,
     refetch 
-  } = useGetAllvehicleQuery();
+  } = VehicleApi.useGetAllVehiclesQuery();
+  console.log(apiResponse)
 
-  // Booking mutation
-  const [createBooking, { 
-    isLoading: isBookingLoading, 
-    isSuccess: isBookingSuccess,
-    error: bookingError,
-    reset: resetBooking 
-  }] = useCreateNewBookingMutation();
+  // Add the booking mutation hook
+  const [createNewBooking, { isLoading: isCreatingBooking }] = useCreateNewBookingMutation();
+ 
 
   // State for filtered cars
   const [filteredCars, setFilteredCars] = useState<Vehicle[]>([]);
@@ -60,10 +52,6 @@ const OurCars: React.FC = () => {
     endDate: '',
     duration: 1
   });
-  const [bookingResult, setBookingResult] = useState<{
-    success: boolean;
-    message: string;
-  } | null>(null);
 
   // Get unique categories and brands from API data
   const categories = ['All', ...new Set(
@@ -76,7 +64,7 @@ const OurCars: React.FC = () => {
       .map((v: Vehicle) => v.manufacturer) || []
   )];
 
-  // Filter cars based on search and filters
+  // Filter cars based on search and filters - FIXED VERSION
   useEffect(() => {
     if (!apiResponse || apiResponse?.length === 0) {
       setFilteredCars([]);
@@ -102,16 +90,9 @@ const OurCars: React.FC = () => {
 
     filtered = filtered.filter(car => car.price <= priceRange);
 
+    // FIX: Set filtered cars instead of apiResponse
     setFilteredCars(filtered);
   }, [apiResponse, searchTerm, selectedCategory, selectedBrand, priceRange]);
-
-  // Reset booking result when modal closes
-  useEffect(() => {
-    if (!showBookingModal) {
-      setBookingResult(null);
-      resetBooking();
-    }
-  }, [showBookingModal, resetBooking]);
 
   const handleBookCar = (car: Vehicle) => {
     if (!isAuthenticated) {
@@ -121,11 +102,6 @@ const OurCars: React.FC = () => {
     
     setSelectedCar(car);
     setShowBookingModal(true);
-    setBookingDates({
-      startDate: '',
-      endDate: '',
-      duration: 1
-    });
   };
 
   const handleBookingSubmit = async (e: React.FormEvent) => {
@@ -133,80 +109,48 @@ const OurCars: React.FC = () => {
     if (!selectedCar || !user) return;
 
     try {
-      const bookingData: CreateBookingRequest = {
-        user_id: user.user_id, // Make sure your user object has user_id
+      // Prepare booking data according to CreateBookingRequest type
+      const bookingData: Booking = {
+        user_id: user.user_id,
         vehicle_id: selectedCar.vehicle_id,
-        booking_date: bookingDates.startDate,
-        return_date: bookingDates.endDate,
+        booking_date: new Date(bookingDates.startDate).toISOString(),
+        return_date: new Date(bookingDates.endDate).toISOString(),
         total_amount: calculateTotal(),
-        booking_status: 'pending' // Default status
+        booking_status: 'pending',
+        first_name: user.first_name,
+        last_name: user.last_name,
+        email: user.email,
+        manufacturer: selectedCar.manufacturer,
+        model: selectedCar.model,
+        category: selectedCar.category,
+        price: selectedCar.price,
+        fuel_type: selectedCar.fuel_type,
+        transmission: selectedCar.transmission,
+        seating_capacity: selectedCar.seating_capacity,
+        location: selectedCar.location
       };
 
-      const result = await createBooking(bookingData).unwrap();
+      // Send booking data to backend
+      const result = await createNewBooking(bookingData).unwrap();
       
-      setBookingResult({
-        success: true,
-        message: result.message || `Booking confirmed for ${selectedCar.model}! Our concierge will contact you shortly.`
-      });
-
-      // Close modal after 3 seconds on success
-      setTimeout(() => {
-        setShowBookingModal(false);
-        setSelectedCar(null);
-        setBookingDates({ startDate: '', endDate: '', duration: 1 });
-      }, 3000);
-
+      // Show success message
+      alert(`Booking confirmed for ${selectedCar.model}! ${result.message}`);
+      
+      // Close modal and reset states
+      setShowBookingModal(false);
+      setSelectedCar(null);
+      setBookingDates({ startDate: '', endDate: '', duration: 1 });
+      
     } catch (error) {
-      const errorMessage = (error as any)?.data?.message || 
-                          (error as any)?.message || 
-                          'Failed to create booking. Please try again.';
-      
-      setBookingResult({
-        success: false,
-        message: errorMessage
-      });
+      console.error('Booking creation failed:', error);
+      alert('Failed to create booking. Please try again.');
     }
   };
+  console.log(selectedCar)
 
   const calculateTotal = () => {
     if (!selectedCar) return 0;
     return selectedCar.price * bookingDates.duration;
-  };
-
-  const calculateDuration = (start: string, end: string): number => {
-    if (!start || !end) return 1;
-    const startDate = new Date(start);
-    const endDate = new Date(end);
-    const diffTime = Math.abs(endDate.getTime() - startDate.getTime());
-    return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-  };
-
-  const handleDateChange = (field: 'startDate' | 'endDate', value: string) => {
-    setBookingDates(prev => {
-      const newDates = { ...prev, [field]: value };
-      
-      // Calculate duration if both dates are set
-      if (newDates.startDate && newDates.endDate) {
-        newDates.duration = calculateDuration(newDates.startDate, newDates.endDate);
-      } else {
-        newDates.duration = 1;
-      }
-      
-      return newDates;
-    });
-  };
-
-  // Get today's date in YYYY-MM-DD format for min date
-  const getTodayDate = () => {
-    return new Date().toISOString().split('T')[0];
-  };
-
-  // Get min return date (day after start date)
-  const getMinReturnDate = () => {
-    if (!bookingDates.startDate) return getTodayDate();
-    const nextDay = new Date(bookingDates.startDate);
-    nextDay.setDate(nextDay.getDate() + 1);
-    return nextDay.toISOString().split('T')[0];
   };
 
   // Loading state
@@ -222,8 +166,9 @@ const OurCars: React.FC = () => {
     );
   }
 
-  // Error state
+  // Error state - Added proper error typing
   if (error) {
+    // You can access error properties safely with type assertion
     const errorMessage = (error as any)?.data?.message || 
                         (error as any)?.message || 
                         'There was an error loading our vehicle fleet.';
@@ -295,7 +240,7 @@ const OurCars: React.FC = () => {
                 onChange={(e) => setSelectedCategory(e.target.value)}
                 className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500"
               >
-                {categories.map((category: string) => (
+                {categories.map((category: any) => (
                   <option key={category} value={category}>{category}</option>
                 ))}
               </select>
@@ -309,7 +254,7 @@ const OurCars: React.FC = () => {
                 onChange={(e) => setSelectedBrand(e.target.value)}
                 className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500"
               >
-                {brands.map((brand: string) => (
+                {brands.map((brand: any) => (
                   <option key={brand} value={brand}>{brand}</option>
                 ))}
               </select>
@@ -324,7 +269,7 @@ const OurCars: React.FC = () => {
             <input
               type="range"
               min="100"
-              max="1000"
+              max="1000000"
               step="50"
               value={priceRange}
               onChange={(e) => setPriceRange(parseInt(e.target.value))}
@@ -332,7 +277,7 @@ const OurCars: React.FC = () => {
             />
             <div className="flex justify-between text-sm text-gray-600 mt-2">
               <span>$100/day</span>
-              <span>$1000/day</span>
+              <span>$1000000/day</span>
             </div>
           </div>
         </div>
@@ -344,7 +289,7 @@ const OurCars: React.FC = () => {
               {/* Image Section */}
               <div className="relative overflow-hidden">
                 <img
-                  src={car.vehicle_image}
+                  src={car?.vehicle_image}
                   alt={car.model}
                   className="w-full h-48 object-cover transform group-hover:scale-110 transition-transform duration-500"
                 />
@@ -449,150 +394,133 @@ const OurCars: React.FC = () => {
         )}
       </div>
 
-      {/* Booking Modal */}
+      {/* Booking Modal - ONLY SHOWS FOR AUTHENTICATED USERS */}
       {showBookingModal && selectedCar && isAuthenticated && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
             <div className="p-6">
               <div className="flex justify-between items-center mb-6">
-                <h2 className="text-2xl font-bold text-gray-900">Book {selectedCar.manufacturer} {selectedCar.model}</h2>
+                <h2 className="text-2xl font-bold text-gray-900">Book {selectedCar.model}</h2>
                 <button
                   onClick={() => setShowBookingModal(false)}
-                  className="text-gray-400 hover:text-gray-600 text-2xl"
-                  disabled={isBookingLoading}
+                  className="text-gray-400 hover:text-gray-600"
                 >
                   ×
                 </button>
               </div>
 
-              {/* Booking Result Message */}
-              {bookingResult && (
-                <div className={`mb-6 p-4 rounded-lg ${
-                  bookingResult.success 
-                    ? 'bg-green-50 border border-green-200' 
-                    : 'bg-red-50 border border-red-200'
-                }`}>
-                  <div className="flex items-center gap-3">
-                    {bookingResult.success ? (
-                      <CheckCircle className="h-5 w-5 text-green-500" />
-                    ) : (
-                      <XCircle className="h-5 w-5 text-red-500" />
-                    )}
-                    <p className={bookingResult.success ? 'text-green-800' : 'text-red-800'}>
-                      {bookingResult.message}
-                    </p>
+              <form onSubmit={handleBookingSubmit}>
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  {/* Car Details */}
+                  <div>
+                    <img
+                      src={selectedCar.vehicle_image}
+                      alt={selectedCar.model}
+                      className="w-full h-48 object-cover rounded-lg mb-4"
+                    />
+                    <h3 className="text-lg font-semibold mb-2">{selectedCar.model}</h3>
+                    <div className="space-y-2 text-sm text-gray-600">
+                      <div className="flex justify-between">
+                        <span>Brand:</span>
+                        <span>{selectedCar.manufacturer}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Category:</span>
+                        <span>{selectedCar.category}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Daily Rate:</span>
+                        <span className="text-red-600 font-semibold">${selectedCar.price}/day</span>
+                      </div>
+                    </div>
                   </div>
-                </div>
-              )}
 
-              {!bookingResult?.success && (
-                <form onSubmit={handleBookingSubmit}>
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                    {/* Car Details */}
+                  {/* Booking Form */}
+                  <div className="space-y-4">
                     <div>
-                      <img
-                        src={selectedCar.vehicle_image}
-                        alt={selectedCar.model}
-                        className="w-full h-48 object-cover rounded-lg mb-4"
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Pick-up Date
+                      </label>
+                      <input
+                        type="date"
+                        required
+                        value={bookingDates.startDate}
+                        onChange={(e) => setBookingDates(prev => ({
+                          ...prev,
+                          startDate: e.target.value,
+                          duration: prev.endDate ? 
+                            Math.ceil((new Date(prev.endDate).getTime() - new Date(e.target.value).getTime()) / (1000 * 60 * 60 * 24)) : 1
+                        }))}
+                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500"
                       />
-                      <h3 className="text-lg font-semibold mb-2">{selectedCar.manufacturer} {selectedCar.model}</h3>
-                      <div className="space-y-2 text-sm text-gray-600">
-                        <div className="flex justify-between">
-                          <span>Brand:</span>
-                          <span>{selectedCar.manufacturer}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span>Category:</span>
-                          <span>{selectedCar.category}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span>Year:</span>
-                          <span>{selectedCar.model_year}</span>
-                        </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Return Date
+                      </label>
+                      <input
+                        type="date"
+                        required
+                        value={bookingDates.endDate}
+                        onChange={(e) => setBookingDates(prev => ({
+                          ...prev,
+                          endDate: e.target.value,
+                          duration: prev.startDate ? 
+                            Math.ceil((new Date(e.target.value).getTime() - new Date(prev.startDate).getTime()) / (1000 * 60 * 60 * 24)) : 1
+                        }))}
+                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                      />
+                    </div>
+
+                    {/* Booking Summary */}
+                    <div className="bg-gray-50 rounded-lg p-4">
+                      <h4 className="font-semibold mb-3">Booking Summary</h4>
+                      <div className="space-y-2 text-sm">
                         <div className="flex justify-between">
                           <span>Daily Rate:</span>
-                          <span className="text-red-600 font-semibold">${selectedCar.price}/day</span>
+                          <span>${selectedCar.price}/day</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>Duration:</span>
+                          <span>{bookingDates.duration} days</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>Insurance:</span>
+                          <span>Included</span>
+                        </div>
+                        <div className="border-t pt-2 mt-2">
+                          <div className="flex justify-between font-semibold">
+                            <span>Total:</span>
+                            <span className="text-red-600">${calculateTotal()}</span>
+                          </div>
                         </div>
                       </div>
                     </div>
 
-                    {/* Booking Form */}
-                    <div className="space-y-4">
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-2">
-                          <Calendar className="inline h-4 w-4 mr-2" />
-                          Pick-up Date
-                        </label>
-                        <input
-                          type="date"
-                          required
-                          min={getTodayDate()}
-                          value={bookingDates.startDate}
-                          onChange={(e) => handleDateChange('startDate', e.target.value)}
-                          disabled={isBookingLoading}
-                          className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
-                        />
-                      </div>
+                    <button
+                      type="submit"
+                      disabled={isCreatingBooking}
+                      className="w-full bg-red-600 hover:bg-red-700 disabled:bg-gray-400 text-white py-3 rounded-lg font-semibold transition-colors flex items-center justify-center gap-2"
+                    >
+                      {isCreatingBooking ? (
 
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-2">
-                          <Calendar className="inline h-4 w-4 mr-2" />
-                          Return Date
-                        </label>
-                        <input
-                          type="date"
-                          required
-                          min={getMinReturnDate()}
-                          value={bookingDates.endDate}
-                          onChange={(e) => handleDateChange('endDate', e.target.value)}
-                          disabled={isBookingLoading || !bookingDates.startDate}
-                          className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
-                        />
-                      </div>
-
-                      {/* Booking Summary */}
-                      <div className="bg-gray-50 rounded-lg p-4">
-                        <h4 className="font-semibold mb-3">Booking Summary</h4>
-                        <div className="space-y-2 text-sm">
-                          <div className="flex justify-between">
-                            <span>Daily Rate:</span>
-                            <span>${selectedCar.price}/day</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span>Duration:</span>
-                            <span>{bookingDates.duration} days</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span>Insurance:</span>
-                            <span>Included</span>
-                          </div>
-                          <div className="border-t pt-2 mt-2">
-                            <div className="flex justify-between font-semibold">
-                              <span>Total:</span>
-                              <span className="text-red-600">${calculateTotal()}</span>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-
-                      <button
-                        type="submit"
-                        disabled={isBookingLoading || !bookingDates.startDate || !bookingDates.endDate}
-                        className="w-full bg-red-600 hover:bg-red-700 disabled:bg-gray-400 text-white py-3 rounded-lg font-semibold transition-colors flex items-center justify-center gap-2 disabled:cursor-not-allowed"
-                      >
-                        {isBookingLoading ? (
-                          <>
-                            <Loader className="h-4 w-4 animate-spin" />
-                            Processing Booking...
-                          </>
-                        ) : (
-                          'Confirm Booking'
-                        )}
-                      </button>
-                    </div>
+                        <>
+                          <Loader className="h-4 w-4 animate-spin" />
+                          Creating Booking...
+                           
+                        </>
+                     
+                      ) : (
+                        'Confirm Booking'
+                      )}
+                         
+                     
+                    </button>
+                      
                   </div>
-                </form>
-              )}
+                </div>
+              </form>
             </div>
           </div>
         </div>

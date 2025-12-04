@@ -32,15 +32,36 @@ const Login: React.FC = () => {
     try {
       const response = await loginUser(data).unwrap();
 
+      // Store user information in localStorage
+      localStorage.setItem('userId', response.userInfo.user_id.toString());
+      localStorage.setItem('userRole', response.userInfo.role); // Store the role
+      localStorage.setItem('userEmail', response.userInfo.email);
+      localStorage.setItem('userName', `${response.userInfo.first_name} ${response.userInfo.last_name}`);
+      
+      // Optionally store token if needed for API calls
+      localStorage.setItem('token', response.token);
+
       dispatch(
         setCredentials({
           token: response.token,
-          user: response.userInfo
+          user: {
+            user_id: response.userInfo.user_id,
+            first_name: response.userInfo.first_name,
+            last_name: response.userInfo.last_name,
+            email: response.userInfo.email,
+            user_type: response.userInfo.role
+          }
         })
       );
 
       toast.success("Welcome to S-Class Merchants!");
-      navigate('/');
+      
+      // Redirect based on role
+      if (response.userInfo.role === 'admin') {
+        navigate('/admin/dashboard'); // Redirect to admin dashboard
+      } else {
+        navigate('/'); // Redirect to user homepage
+      }
     } catch (error: unknown) {
       const err = error as { data: { error: string } };
       toast.error(err.data.error || "Login failed. Please try again.");

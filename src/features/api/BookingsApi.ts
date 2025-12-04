@@ -30,7 +30,7 @@ export const BookingApi = createApi({
         }),
 
         // Get bookings by user id
-        getUserBookings: builder.query<Booking[], { user_id: string | number }>({
+        getUserBookings: builder.query<Booking[], { user_id:  number }>({
             query: ({ user_id }) => `/bookings/user/${user_id}`,
             providesTags: ['booking'],
         }),
@@ -46,17 +46,14 @@ export const BookingApi = createApi({
         }),
 
         // Update booking status
-        updateBookingStatus: builder.mutation<{ message: string }, { 
-            booking_id: string | number 
-            status: string 
-        }>({
-            query: ({ booking_id, status }) => ({
-                url: `/bookings/${booking_id}/status`,
-                method: 'PUT',
-                body: { status },
-            }),
-            invalidatesTags: ['booking'],
-        }),
+       updateBookingStatus: builder.mutation({
+  query: ({ booking_id, booking_status }) => ({
+    url: `/bookings/${booking_id}/status`,
+    method: "PUT",
+    body: { booking_status },   // MUST MATCH
+  }),
+}),
+
 
         // Cancel booking
         cancelBooking: builder.mutation<{ message: string }, { 
