@@ -240,12 +240,7 @@ const AdminSidebar: React.FC = () => {
             icon: <Car className="w-5 h-5" />,
             badge: vehiclesLoading ? '...' : vehicleCount.toString()
         },
-        {
-            name: 'Services',
-            path: '/admin/services',
-            icon: <Clipboard className="w-5 h-5" />,
-            badge: '0' // Add when you have services API
-        }
+      
     ]
 
   
@@ -308,106 +303,8 @@ const AdminSidebar: React.FC = () => {
                 ))}
             </nav>
 
-            {/* Vehicle Status Overview */}
-            <div className="p-4 border-b border-gray-700">
-                <div className="flex items-center justify-between mb-3">
-                    <h3 className="text-sm font-semibold text-gray-300 uppercase tracking-wider">Fleet Status</h3>
-                    <Activity className="w-4 h-4 text-gray-500" />
-                </div>
-                <div className="space-y-3">
-                    {vehicleStatus.map((status, index) => (
-                        <div key={index} className="flex items-center justify-between">
-                            <div className="flex items-center gap-3">
-                                <div className={`w-3 h-3 rounded-full ${status.color}`}></div>
-                                <span className="text-sm text-gray-400">{status.status}</span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                                <span className="text-sm font-semibold text-white">{status.count}</span>
-                                <div className="w-16 bg-gray-700 rounded-full h-2">
-                                    <div 
-                                        className={`h-2 rounded-full ${status.color} transition-all duration-1000`}
-                                        style={{ width: `${(status.count / totalVehicles) * 100}%` }}
-                                    ></div>
-                                </div>
-                            </div>
-                        </div>
-                    ))}
-                </div>
-            </div>
+       
 
-            {/* Recent Activity */}
-            <div className="p-4 border-b border-gray-700">
-                <div className="flex items-center justify-between mb-3">
-                    <h3 className="text-sm font-semibold text-gray-300 uppercase tracking-wider">Recent Activity</h3>
-                    <TrendingUp className="w-4 h-4 text-gray-500" />
-                </div>
-                <div className="space-y-3">
-                    {recentActivity.map((activity, index) => (
-                        <div key={index} className="flex items-start gap-3 p-2 rounded-lg hover:bg-gray-800 transition-colors">
-                            <div className="w-2 h-2 bg-red-500 rounded-full mt-2 flex-shrink-0"></div>
-                            <div className="flex-1 min-w-0">
-                                <p className="text-sm text-white truncate">{activity.action}</p>
-                                <div className="flex justify-between items-center mt-1">
-                                    <span className="text-xs text-gray-500">{activity.user}</span>
-                                    <span className="text-xs text-gray-500">{activity.time}</span>
-                                </div>
-                            </div>
-                        </div>
-                    ))}
-                </div>
-            </div>
-
-            {/* User Analytics */}
-            <div className="p-4 border-b border-gray-700">
-                <div className="flex items-center justify-between mb-3">
-                    <h3 className="text-sm font-semibold text-gray-300 uppercase tracking-wider">User Analytics</h3>
-                    <Users className="w-4 h-4 text-gray-500" />
-                </div>
-                <div className="bg-gray-800 rounded-lg p-3">
-                    <div className="flex justify-between items-center mb-2">
-                        <span className="text-xs text-gray-400">Total Registered Users</span>
-                        <span className="text-xs text-green-500 font-semibold">
-                            {userCount > 0 ? `+${Math.round(userCount * 0.05)}%` : '0%'}
-                        </span>
-                    </div>
-                    {/* User growth visualization */}
-                    <div className="flex items-end justify-between h-16 gap-1">
-                        {[20, 35, 50, 65, 45, 70, userCount > 0 ? Math.min(100, (userCount / 10) * 7) : 80].map((height, index) => (
-                            <div key={index} className="flex-1 flex flex-col items-center">
-                                <div 
-                                    className="w-full bg-gradient-to-t from-purple-600 to-purple-400 rounded-t transition-all duration-500 hover:from-purple-500 hover:to-purple-300"
-                                    style={{ height: `${height}%` }}
-                                ></div>
-                                <span className="text-xs text-gray-500 mt-1">{['M', 'T', 'W', 'T', 'F', 'S', 'S'][index]}</span>
-                            </div>
-                        ))}
-                    </div>
-                    <div className="mt-2 text-center">
-                        <span className="text-xs text-gray-400">
-                            {userCount} total users • {Math.round(userCount * 0.15)} active today
-                        </span>
-                    </div>
-                </div>
-            </div>
-
-            {/* User Profile Section */}
-            <div className="p-4">
-                <div className="flex items-center gap-3 p-3 rounded-lg bg-gray-800 hover:bg-gray-750 transition-colors cursor-pointer group">
-                    <div className="w-10 h-10 bg-gradient-to-br from-red-600 to-red-800 rounded-full flex items-center justify-center group-hover:from-red-500 group-hover:to-red-700 transition-colors">
-                        <span className="text-white font-bold text-sm">
-                            {currentUser.name.split(' ').map(n => n[0]).join('')}
-                        </span>
-                    </div>
-                    <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-white truncate">{currentUser.name}</p>
-                        <p className="text-xs text-gray-400 truncate">{currentUser.role}</p>
-                        {currentUser.email && (
-                            <p className="text-xs text-gray-500 truncate mt-1">{currentUser.email}</p>
-                        )}
-                    </div>
-                    <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" title="Online"></div>
-                </div>
-                
                 {/* Quick User Stats */}
                 <div className="mt-3 grid grid-cols-3 gap-2">
                     <div className="bg-gray-800 rounded-lg p-2 text-center">
@@ -425,7 +322,7 @@ const AdminSidebar: React.FC = () => {
                 </div>
             </div>
         </div>
-        </div>
+    
     )
 }
 

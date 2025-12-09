@@ -14,12 +14,9 @@ import {
 } from 'lucide-react';
 
 import type { RootState } from '../store/store';
-import * as
- 
-  VehicleApi
-from '../features/api/VehiclesApi';
+import * as VehicleApi from '../features/api/VehiclesApi';
 import { useCreateNewBookingMutation } from '../features/api/BookingsApi';
-import type { Vehicle,Booking } from '../types/Types';
+import type { Vehicle, Booking } from '../types/Types';
 import NavBar from "../components/NavBar"
 
 const OurCars: React.FC = () => {
@@ -33,7 +30,6 @@ const OurCars: React.FC = () => {
     error,
     refetch 
   } = VehicleApi.useGetAllVehiclesQuery();
-  console.log(apiResponse)
 
   // Add the booking mutation hook
   const [createNewBooking, { isLoading: isCreatingBooking }] = useCreateNewBookingMutation();
@@ -44,7 +40,9 @@ const OurCars: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [selectedBrand, setSelectedBrand] = useState('All');
-  const [priceRange, setPriceRange] = useState(1000);
+  
+  // Removed priceRange state
+  
   const [showBookingModal, setShowBookingModal] = useState(false);
   const [selectedCar, setSelectedCar] = useState<Vehicle | null>(null);
   const [bookingDates, setBookingDates] = useState({
@@ -64,7 +62,7 @@ const OurCars: React.FC = () => {
       .map((v: Vehicle) => v.manufacturer) || []
   )];
 
-  // Filter cars based on search and filters - FIXED VERSION
+  // Filter cars based on search and filters
   useEffect(() => {
     if (!apiResponse || apiResponse?.length === 0) {
       setFilteredCars([]);
@@ -88,11 +86,10 @@ const OurCars: React.FC = () => {
       filtered = filtered.filter(car => car.manufacturer === selectedBrand);
     }
 
-    filtered = filtered.filter(car => car.price <= priceRange);
+    // Removed price filtering logic here so all prices are displayed
 
-    // FIX: Set filtered cars instead of apiResponse
     setFilteredCars(filtered);
-  }, [apiResponse, searchTerm, selectedCategory, selectedBrand, priceRange]);
+  }, [apiResponse, searchTerm, selectedCategory, selectedBrand]); // Removed priceRange dependency
 
   const handleBookCar = (car: Vehicle) => {
     if (!isAuthenticated) {
@@ -109,7 +106,6 @@ const OurCars: React.FC = () => {
     if (!selectedCar || !user) return;
 
     try {
-      // Prepare booking data according to CreateBookingRequest type
       const bookingData: Booking = {
         user_id: user.user_id,
         vehicle_id: selectedCar.vehicle_id,
@@ -130,13 +126,10 @@ const OurCars: React.FC = () => {
         location: selectedCar.location
       };
 
-      // Send booking data to backend
       const result = await createNewBooking(bookingData).unwrap();
       
-      // Show success message
       alert(`Booking confirmed for ${selectedCar.model}! ${result.message}`);
       
-      // Close modal and reset states
       setShowBookingModal(false);
       setSelectedCar(null);
       setBookingDates({ startDate: '', endDate: '', duration: 1 });
@@ -146,7 +139,6 @@ const OurCars: React.FC = () => {
       alert('Failed to create booking. Please try again.');
     }
   };
-  console.log(selectedCar)
 
   const calculateTotal = () => {
     if (!selectedCar) return 0;
@@ -166,9 +158,8 @@ const OurCars: React.FC = () => {
     );
   }
 
-  // Error state - Added proper error typing
+  // Error state
   if (error) {
-    // You can access error properties safely with type assertion
     const errorMessage = (error as any)?.data?.message || 
                         (error as any)?.message || 
                         'There was an error loading our vehicle fleet.';
@@ -261,25 +252,7 @@ const OurCars: React.FC = () => {
             </div>
           </div>
 
-          {/* Price Range */}
-          <div className="mt-6">
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Price Range: Up to ${priceRange}/day
-            </label>
-            <input
-              type="range"
-              min="100"
-              max="1000000"
-              step="50"
-              value={priceRange}
-              onChange={(e) => setPriceRange(parseInt(e.target.value))}
-              className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer slider"
-            />
-            <div className="flex justify-between text-sm text-gray-600 mt-2">
-              <span>$100/day</span>
-              <span>$1000000/day</span>
-            </div>
-          </div>
+          {/* Price Range Slider Removed */}
         </div>
 
         {/* Cars Grid */}
@@ -384,7 +357,7 @@ const OurCars: React.FC = () => {
                 setSearchTerm('');
                 setSelectedCategory('All');
                 setSelectedBrand('All');
-                setPriceRange(1000);
+                // Removed price reset
               }}
               className="bg-red-600 hover:bg-red-700 text-white px-6 py-3 rounded-lg font-semibold transition-colors"
             >
@@ -394,7 +367,7 @@ const OurCars: React.FC = () => {
         )}
       </div>
 
-      {/* Booking Modal - ONLY SHOWS FOR AUTHENTICATED USERS */}
+      {/* Booking Modal */}
       {showBookingModal && selectedCar && isAuthenticated && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
@@ -504,20 +477,14 @@ const OurCars: React.FC = () => {
                       className="w-full bg-red-600 hover:bg-red-700 disabled:bg-gray-400 text-white py-3 rounded-lg font-semibold transition-colors flex items-center justify-center gap-2"
                     >
                       {isCreatingBooking ? (
-
                         <>
                           <Loader className="h-4 w-4 animate-spin" />
                           Creating Booking...
-                           
                         </>
-                     
                       ) : (
                         'Confirm Booking'
                       )}
-                         
-                     
                     </button>
-                      
                   </div>
                 </div>
               </form>

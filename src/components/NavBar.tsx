@@ -54,7 +54,7 @@ const NavBar: React.FC = () => {
                 </li>
               </Link>
             ) : (
-              <Link to="/dashboard">
+              <Link to="/user/dashboard">
                 <li>
                   <a className="text-gray-700 hover:text-red-600 hover:bg-gray-50 rounded-md transition-colors duration-200">
                     Dashboard
@@ -87,7 +87,7 @@ const NavBar: React.FC = () => {
               </li>
             </Link>
           ) : (
-            <Link to="/dashboard">
+            <Link to="/user/dashboard">
               <li>
                 <a className="text-gray-600 hover:text-red-600 hover:bg-gray-50 font-medium px-4 py-2 rounded-md transition-all duration-300">
                   Dashboard
@@ -138,7 +138,7 @@ const NavBar: React.FC = () => {
                 
                 <li>
                   <Link 
-                    to="/dashboard" 
+                    to="/user/dashboard" 
                     className="flex items-center gap-3 px-4 py-3 text-gray-700 hover:text-red-600 hover:bg-gray-50 rounded-md transition-colors duration-200"
                     onClick={() => setIsProfileDropdownOpen(false)}
                   >

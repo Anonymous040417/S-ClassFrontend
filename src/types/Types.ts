@@ -64,8 +64,9 @@ export interface User {
   email: string;
   contact_phone?: string;
   address?: string;
-  role: 'user' | 'admin';
+  role: 'user' | 'admin'|string;
   created_at: string;
+  updated_at:string;
 }
 
 export interface UserFormValues {
@@ -75,6 +76,7 @@ export interface UserFormValues {
   password: string;
   contact_phone?: string;
   address?: string;
+  created_at:string;
   role?: 'user' | 'admin';
 }
 
@@ -120,7 +122,7 @@ export interface Booking {
     phone?: string;
     driver_license_number?: string;
   
-   
+   price:number;
     manufacturer: string;
     model: string;
     model_year: number;
@@ -183,9 +185,9 @@ export interface Payment {
   payment_id: number;
   booking_id: number;
   amount: number;
-  currency: string;
+  currency?: string;
   payment_method: 'mpesa' | 'card' | 'cash';
-  status: 'pending' | 'completed' | 'failed' | 'refunded';
+ payment_status: 'pending' | 'completed' | 'failed' | 'refunded';
   transaction_id?:string;
   transaction_reference?: string;
   mpesa_receipt_number?: string;
@@ -196,16 +198,23 @@ export interface Payment {
   
   // Related data
   booking?: {
-    booking_id: number;
+   
+ booking_id: number;
     user_name?: string;
     user_email?: string;
     vehicle_model?: string;
     vehicle_manufacturer?: string;
+     booking_date:string;
   };
   user?: {
+    
     user_id:number;
     first_name: string;
     last_name: string;
     email: string;
+    role:string;
+    created_at:string;
+    updated_at:string;
+    contact_phone:string
   };
 }

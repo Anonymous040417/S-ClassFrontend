@@ -35,6 +35,11 @@ export const PaymentsApi = createApi({
             providesTags: ['payment'],
         }),
 
+        getPaymentsByUserId: builder.query<Payment[], { user_id: string | number }>({
+            query: ({ user_id }) => `/payments/user/${user_id}`,
+            providesTags: ['payment'],
+        }),
+
         // Create new payment
         createNewPayment: builder.mutation<{ message: string }, Partial<Omit<Payment, 'payment_id'>>>({
             query: (newPayment) => ({
@@ -59,16 +64,31 @@ export const PaymentsApi = createApi({
             invalidatesTags: ['payment'],
         }),
 
-        // Update payment status
+        // FIXED: Update payment status - check what your backend expects
         updatePaymentStatus: builder.mutation<{ message: string }, { 
             payment_id: string | number 
-            status: string 
+            payment_status: string 
         }>({
-            query: ({ payment_id, status }) => ({
-                url: `/payments/${payment_id}/status`,
-                method: 'PUT',
-                body: { status },
-            }),
+            query: ({ payment_id, payment_status }) => {
+                // Try different payload formats based on what your backend expects
+                const payload = { 
+                   payment_status:payment_status
+                    // OR try: payment_status: status
+                    // OR try: data: { status: status }
+                };
+                
+                console.log('📡 API Request:', {
+                    url: `/payments/${payment_id}/status`,
+                    method: 'PUT',
+                    body: payload
+                });
+
+                return {
+                    url: `/payments/${payment_id}/status`,
+                    method: 'PUT',
+                    body: payload,
+                };
+            },
             invalidatesTags: ['payment'],
         }),
     }),
@@ -77,9 +97,10 @@ export const PaymentsApi = createApi({
 // Export hooks for usage in components
 export const {
     useGetAllPaymentsQuery,
-  useGetPaymentByIdQuery,
-  useGetPaymentsByBookingIdQuery,  // Add this
-  useCreateNewPaymentMutation,
-  useProcessMpesaPaymentMutation,
-  useUpdatePaymentStatusMutation,
+    useGetPaymentByIdQuery,
+    useGetPaymentsByUserIdQuery,
+    useGetPaymentsByBookingIdQuery,
+    useCreateNewPaymentMutation,
+    useProcessMpesaPaymentMutation,
+    useUpdatePaymentStatusMutation,
 } = PaymentsApi

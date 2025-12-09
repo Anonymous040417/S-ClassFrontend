@@ -10,6 +10,9 @@ import AdminVehiclesPage from './pages/Admin.Dashboard/Vehicles';
 import AdminBookingsPage from './pages/Admin.Dashboard/Bookings';
 import AdminPaymentsPage from './pages/Admin.Dashboard/Payments';
 import UserBookingPage from './pages/user.Dashboard/UserBookings';
+import UserPaymentsPage from './pages/user.Dashboard/UserPayments';
+import UserDashboard from './pages/user.Dashboard/UserDashboard';
+import UserProfilePage from './pages/user.Dashboard/UserProfile';
 
 
 function App(){
@@ -55,10 +58,23 @@ function App(){
       path:'/admin/payments',
       element:<AdminPaymentsPage/>
     },
+      {
+      path:'/user/dashboard',
+      element:<UserDashboard/>
+    },
     {
-      path:'/dashboard',
+      path:'/user/bookings',
       element:<UserBookingPage/>
-    }
+    },
+     {
+      path:'/user/payments',
+      element:<UserPaymentsPage/>
+    },
+     {
+      path:'/user/profile',
+      element:<UserProfilePage/>
+    },
+
 
 
 
