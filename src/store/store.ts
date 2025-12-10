@@ -1,9 +1,15 @@
 import { configureStore } from '@reduxjs/toolkit'
 import { AuthApi } from '../features/api/AuthAPi'
 import authSlice from '../features/api/slice/AuthSlice'
+// @ts-ignore
 import storage from 'redux-persist/lib/storage' // defaults to localStorage for web
+// @ts-ignore
 import { persistReducer, persistStore, FLUSH, REHYDRATE, PAUSE, PERSIST, PURGE, REGISTER } from 'redux-persist';
 import { VehicleApi } from '../features/api/VehiclesApi';
+import { BookingApi } from '../features/api/BookingsApi';
+import { adminApi } from '../features/api/AdminApi';
+import { usersApi } from '../features/api/UserAPi';
+import { PaymentsApi } from '../features/api/PaymentApi';
 
 
 // configure the Redux store
@@ -22,6 +28,11 @@ export const store = configureStore({
         // Add the AuthApi reducer
         [AuthApi.reducerPath]: AuthApi.reducer,
         [VehicleApi.reducerPath]:VehicleApi.reducer,
+        [BookingApi.reducerPath]:BookingApi.reducer,
+        [adminApi.reducerPath]:adminApi.reducer,
+        [usersApi.reducerPath]:usersApi.reducer,
+        [PaymentsApi.reducerPath]:PaymentsApi.reducer,
+        
       
         //add the auth slice reducer
         authSlice: persistedAuthReducer
@@ -31,7 +42,9 @@ export const store = configureStore({
             serializableCheck: {
                 ignoredActions: [FLUSH, REHYDRATE, PAUSE, PERSIST, PURGE, REGISTER],
             },
-        }).concat(AuthApi.middleware,VehicleApi.middleware),
+        }).concat(AuthApi.middleware,VehicleApi.middleware,BookingApi.middleware
+            ,adminApi.middleware,usersApi.middleware,PaymentsApi.middleware
+        ),
 })
 
 //export the persisted store
