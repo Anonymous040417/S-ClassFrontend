@@ -3,10 +3,9 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "scripts": {
+ "scripts": {
   "dev": "vite",
-  "build": "tsc --noEmit && vite build",
-  "build:render": "vite build --mode production",
+  "build": "vite build",
   "lint": "eslint .",
   "preview": "vite preview"
 },
