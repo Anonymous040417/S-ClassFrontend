@@ -1,9 +1,7 @@
 import { configureStore } from '@reduxjs/toolkit'
 import { AuthApi } from '../features/api/AuthAPi'
 import authSlice from '../features/api/slice/AuthSlice'
-// @ts-ignore
 import storage from 'redux-persist/lib/storage' // defaults to localStorage for web
-// @ts-ignore
 import { persistReducer, persistStore, FLUSH, REHYDRATE, PAUSE, PERSIST, PURGE, REGISTER } from 'redux-persist';
 import { VehicleApi } from '../features/api/VehiclesApi';
 import { BookingApi } from '../features/api/BookingsApi';
