@@ -120,7 +120,7 @@ export interface Booking {
     last_name: string;
     email: string;
     phone?: string;
-    driver_license_number?: string;
+    license_plate?: string;
   
    price:number;
     manufacturer: string;
@@ -187,7 +187,7 @@ export interface Payment {
   amount: number;
   currency?: string;
   payment_method: 'mpesa' | 'card' | 'cash';
- payment_status: 'pending' | 'completed' | 'failed' | 'refunded';
+ payment_status: 'pending' | 'completed' | 'failed' | 'refunded'|'paid';
   transaction_id?:string;
   transaction_reference?: string;
   mpesa_receipt_number?: string;

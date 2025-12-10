@@ -97,25 +97,70 @@ const OurCars: React.FC = () => {
       return;
     }
     
+    // Debug: Check user data
+    console.log('User data when booking:', user);
+    console.log('User ID:', user?.user_id);
+    console.log('User ID type:', typeof user?.user_id);
+    
+    // Validate user has a valid ID
+    if (!user || !user.user_id || user.user_id === 0) {
+      alert('Your account information is incomplete. Please log out and log back in.');
+      return;
+    }
+    
     setSelectedCar(car);
     setShowBookingModal(true);
+    // Set default dates
+    const today = new Date().toISOString().split('T')[0];
+    const tomorrow = new Date(Date.now() + 86400000).toISOString().split('T')[0];
+    setBookingDates({
+      startDate: today,
+      endDate: tomorrow,
+      duration: 1
+    });
   };
 
   const handleBookingSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedCar || !user) return;
 
+    // Debug logging
+    console.log('Submitting booking with:');
+    console.log('User:', user);
+    console.log('User ID:', user.user_id);
+    console.log('Selected Car:', selectedCar);
+
+    // Validate user ID exists
+    if (!user.user_id || user.user_id === 0) {
+      alert('Invalid user account. Please log out and log back in.');
+      return;
+    }
+
+    // Validate dates
+    if (!bookingDates.startDate || !bookingDates.endDate) {
+      alert('Please select both pick-up and return dates.');
+      return;
+    }
+
+    const startDate = new Date(bookingDates.startDate);
+    const endDate = new Date(bookingDates.endDate);
+    
+    if (startDate >= endDate) {
+      alert('Return date must be after pick-up date.');
+      return;
+    }
+
     try {
       const bookingData: Booking = {
         user_id: user.user_id,
         vehicle_id: selectedCar.vehicle_id,
-        booking_date: new Date(bookingDates.startDate).toISOString(),
-        return_date: new Date(bookingDates.endDate).toISOString(),
+        booking_date: startDate.toISOString(),
+        return_date: endDate.toISOString(),
         total_amount: calculateTotal(),
         booking_status: 'pending',
-        first_name: user.first_name,
-        last_name: user.last_name,
-        email: user.email,
+        first_name: user.first_name || '',
+        last_name: user.last_name || '',
+        email: user.email || '',
         manufacturer: selectedCar.manufacturer,
         model: selectedCar.model,
         category: selectedCar.category,
@@ -126,6 +171,8 @@ const OurCars: React.FC = () => {
         location: selectedCar.location
       };
 
+      console.log('Booking data being sent:', bookingData);
+
       const result = await createNewBooking(bookingData).unwrap();
       
       alert(`Booking confirmed for ${selectedCar.model}! ${result.message}`);
@@ -134,15 +181,75 @@ const OurCars: React.FC = () => {
       setSelectedCar(null);
       setBookingDates({ startDate: '', endDate: '', duration: 1 });
       
-    } catch (error) {
+    } catch (error: any) {
       console.error('Booking creation failed:', error);
-      alert('Failed to create booking. Please try again.');
+      
+      // Handle specific error cases
+      if (error?.number === 547) {
+        alert('Your account information is not properly registered. Please:\n\n1. Log out and log back in\n2. Complete your profile\n3. If the issue persists, contact support');
+      } else if (error?.data?.message) {
+        alert(`Failed to create booking: ${error.data.message}`);
+      } else {
+        alert('Failed to create booking. Please try again.');
+      }
     }
   };
 
   const calculateTotal = () => {
-    if (!selectedCar) return 0;
-    return selectedCar.price * bookingDates.duration;
+    if (!selectedCar?.price) return 0;
+    
+    // Convert to number and ensure it's valid
+    const price = Number(selectedCar.price) || 0;
+    const days = Number(bookingDates.duration) || 1;
+    
+    return price * days;
+  };
+
+  // Improved date change handlers
+  const handleStartDateChange = (date: string) => {
+    if (!date) return;
+    
+    const start = new Date(date);
+    const end = bookingDates.endDate ? new Date(bookingDates.endDate) : new Date(date);
+    
+    let duration = 1;
+    if (end > start) {
+      const timeDiff = end.getTime() - start.getTime();
+      duration = Math.max(1, Math.ceil(timeDiff / (1000 * 3600 * 24)));
+    }
+    
+    setBookingDates({
+      startDate: date,
+      endDate: bookingDates.endDate,
+      duration
+    });
+  };
+
+  const handleEndDateChange = (date: string) => {
+    if (!date) return;
+    
+    const end = new Date(date);
+    const start = bookingDates.startDate ? new Date(bookingDates.startDate) : new Date(date);
+    
+    let duration = 1;
+    if (end > start) {
+      const timeDiff = end.getTime() - start.getTime();
+      duration = Math.max(1, Math.ceil(timeDiff / (1000 * 3600 * 24)));
+    } else {
+      // If end date is before start date, adjust start date
+      setBookingDates({
+        startDate: date,
+        endDate: date,
+        duration: 1
+      });
+      return;
+    }
+    
+    setBookingDates({
+      startDate: bookingDates.startDate,
+      endDate: date,
+      duration
+    });
   };
 
   // Loading state
@@ -357,7 +464,6 @@ const OurCars: React.FC = () => {
                 setSearchTerm('');
                 setSelectedCategory('All');
                 setSelectedBrand('All');
-                // Removed price reset
               }}
               className="bg-red-600 hover:bg-red-700 text-white px-6 py-3 rounded-lg font-semibold transition-colors"
             >
@@ -368,7 +474,7 @@ const OurCars: React.FC = () => {
       </div>
 
       {/* Booking Modal */}
-      {showBookingModal && selectedCar && isAuthenticated && (
+      {showBookingModal && selectedCar && isAuthenticated && user && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
             <div className="p-6">
@@ -418,12 +524,8 @@ const OurCars: React.FC = () => {
                         type="date"
                         required
                         value={bookingDates.startDate}
-                        onChange={(e) => setBookingDates(prev => ({
-                          ...prev,
-                          startDate: e.target.value,
-                          duration: prev.endDate ? 
-                            Math.ceil((new Date(prev.endDate).getTime() - new Date(e.target.value).getTime()) / (1000 * 60 * 60 * 24)) : 1
-                        }))}
+                        onChange={(e) => handleStartDateChange(e.target.value)}
+                        min={new Date().toISOString().split('T')[0]}
                         className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500"
                       />
                     </div>
@@ -436,12 +538,8 @@ const OurCars: React.FC = () => {
                         type="date"
                         required
                         value={bookingDates.endDate}
-                        onChange={(e) => setBookingDates(prev => ({
-                          ...prev,
-                          endDate: e.target.value,
-                          duration: prev.startDate ? 
-                            Math.ceil((new Date(e.target.value).getTime() - new Date(prev.startDate).getTime()) / (1000 * 60 * 60 * 24)) : 1
-                        }))}
+                        onChange={(e) => handleEndDateChange(e.target.value)}
+                        min={bookingDates.startDate || new Date().toISOString().split('T')[0]}
                         className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500"
                       />
                     </div>
@@ -471,9 +569,18 @@ const OurCars: React.FC = () => {
                       </div>
                     </div>
 
+                    {/* User Info Display (for debugging) */}
+                    {process.env.NODE_ENV === 'development' && (
+                      <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 text-sm">
+                        <p className="font-medium">Debug Info:</p>
+                        <p>User ID: {user?.user_id}</p>
+                        <p>User Name: {user?.first_name} {user?.last_name}</p>
+                      </div>
+                    )}
+
                     <button
                       type="submit"
-                      disabled={isCreatingBooking}
+                      disabled={isCreatingBooking || !user?.user_id}
                       className="w-full bg-red-600 hover:bg-red-700 disabled:bg-gray-400 text-white py-3 rounded-lg font-semibold transition-colors flex items-center justify-center gap-2"
                     >
                       {isCreatingBooking ? (

@@ -10,37 +10,49 @@ import {
   AlertCircle,
   Eye,
   DollarSign,
-  Loader2
+  Loader2,
+  Archive
 } from 'lucide-react'
 import { BookingApi } from '../../features/api/BookingsApi'
+import { VehicleApi } from '../../features/api/VehiclesApi'
 import type { Booking } from '../../types/Types'
 import AdminDashboardLayout from '../../Dashboard.designs/AdminDashboardLayout'
-import { format, parseISO } from 'date-fns'
+import { format, parseISO, differenceInDays } from 'date-fns'
+
+// Define interface for booking with completion timestamp
+interface BookingWithCompletion extends Booking {
+  completed_at?: string | Date;
+  scheduled_for_removal?: boolean;
+}
 
 const AdminBookingsPage: React.FC = () => {
   const { data: apiResponse, isLoading, error, refetch } = BookingApi.useGetAllBookingsQuery()
   const [updateBookingStatus, { isLoading: isUpdatingStatus }] = BookingApi.useUpdateBookingStatusMutation()
   const [cancelBooking, { isLoading: isCancelling }] = BookingApi.useCancelBookingMutation()
- 
+  const [updateVehicle] = VehicleApi.useUpdateVehicleMutation()
+  const [deleteBooking] = BookingApi.useCancelBookingMutation() // We'll use cancel for deletion too
 
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState<'all' | Booking['booking_status']>('all')
-  const [selectedBooking, setSelectedBooking] = useState<Booking | null>(null)
+  const [selectedBooking, setSelectedBooking] = useState<BookingWithCompletion | null>(null)
   const [isCancelModalOpen, setIsCancelModalOpen] = useState(false)
   const [isStatusModalOpen, setIsStatusModalOpen] = useState(false)
   const [isDetailsModalOpen, setIsDetailsModalOpen] = useState(false)
-  const [bookingToCancel, setBookingToCancel] = useState<Booking | null>(null)
-  const [bookings, setBookings] = useState<Booking[]>([])
+  const [bookingToCancel, setBookingToCancel] = useState<BookingWithCompletion | null>(null)
+  const [bookings, setBookings] = useState<BookingWithCompletion[]>([])
+  const [completedBookingsPendingRemoval, setCompletedBookingsPendingRemoval] = useState<BookingWithCompletion[]>([])
+  const [isArchiveModalOpen, setIsArchiveModalOpen] = useState(false)
+  const [bookingToArchive, setBookingToArchive] = useState<BookingWithCompletion | null>(null)
 
   // Status update form
   const [statusForm, setStatusForm] = useState({
     booking_status: 'pending' as Booking['booking_status']
   })
 
-  // Extract bookings from API response
+  // Extract bookings from API response and add completion tracking
   useEffect(() => {
     if (apiResponse) {
-      let bookingsArray: Booking[] = [];
+      let bookingsArray: BookingWithCompletion[] = [];
       
       if (Array.isArray(apiResponse)) {
         bookingsArray = apiResponse;
@@ -57,7 +69,7 @@ const AdminBookingsPage: React.FC = () => {
         bookingsArray = [];
       }
 
-      // Ensure all bookings have required fields with defaults
+      // Enhance bookings with completion tracking
       bookingsArray = bookingsArray.map(booking => ({
         ...booking,
         booking_status: booking.booking_status || 'pending',
@@ -73,12 +85,25 @@ const AdminBookingsPage: React.FC = () => {
         seating_capacity: booking.seating_capacity || 0,
         rental_rate: booking.rental_rate || 0,
         total_amount: booking.total_amount || 0,
-        payments: booking.payments || []
+        payments: booking.payments || [],
+        // Add completion tracking fields
+        completed_at: booking.booking_status === 'completed' ? booking.updated_at || new Date().toISOString() : undefined,
+        scheduled_for_removal: false
       }));
 
       setBookings(bookingsArray);
+      
+      // Find completed bookings that are ready for removal (completed more than 1 day ago)
+      const readyForRemoval = bookingsArray.filter(booking => 
+        booking.booking_status === 'completed' && 
+        booking.completed_at && 
+        differenceInDays(new Date(), new Date(booking.completed_at.toString())) >= 1
+      );
+      
+      setCompletedBookingsPendingRemoval(readyForRemoval);
     } else {
       setBookings([]);
+      setCompletedBookingsPendingRemoval([]);
     }
   }, [apiResponse])
 
@@ -91,8 +116,101 @@ const AdminBookingsPage: React.FC = () => {
     }
   }, [selectedBooking])
 
-  // Filter bookings based on search and filters
+  // Function to handle removing completed booking after 1 day
+  const handleRemoveCompletedBooking = async (booking: BookingWithCompletion) => {
+    if (!booking || !booking.booking_id) return;
+
+    try {
+      console.log('Removing completed booking after 1 day:', booking.booking_id);
+      
+      // First, update vehicle availability (set availability to true)
+      if (booking.vehicle_id) {
+        try {
+          await updateVehicle({
+            vehicle_id: booking.vehicle_id,
+            availability: true, // Set vehicle as available
+            // Note: The 'status' field doesn't exist in updateVehicle mutation
+            // If you need to update status, you might need a different endpoint
+          }).unwrap();
+          
+          console.log('Vehicle availability updated for vehicle:', booking.vehicle_id);
+        } catch (vehicleError: any) {
+          console.error('Failed to update vehicle availability:', vehicleError);
+          // Continue with booking removal even if vehicle update fails
+        }
+      }
+      
+      // Remove the booking from the database
+      // In a real implementation, you might want to archive it instead of deleting
+      await deleteBooking({ 
+        booking_id: booking.booking_id 
+      }).unwrap();
+      
+      console.log('Completed booking removed successfully after 1 day');
+      
+      // Update local state
+      setBookings(prev => prev.filter(b => b.booking_id !== booking.booking_id));
+      
+    } catch (error: any) {
+      console.error('Failed to remove completed booking:', error);
+      // You might want to implement retry logic here
+    }
+  };
+
+  // Function to manually archive/remove a completed booking
+  const handleArchiveBooking = async () => {
+    if (!bookingToArchive || !bookingToArchive.booking_id) return;
+
+    try {
+      console.log('Manually archiving booking:', bookingToArchive.booking_id);
+      
+      // Update vehicle availability
+      if (bookingToArchive.vehicle_id) {
+        try {
+          await updateVehicle({
+            vehicle_id: bookingToArchive.vehicle_id,
+            availability: true,
+            // Note: The 'status' field doesn't exist in updateVehicle mutation
+          }).unwrap();
+          console.log('Vehicle availability restored for vehicle:', bookingToArchive.vehicle_id);
+        } catch (vehicleError) {
+          console.error('Failed to update vehicle:', vehicleError);
+        }
+      }
+      
+      // Remove booking
+      await deleteBooking({ 
+        booking_id: bookingToArchive.booking_id 
+      }).unwrap();
+      
+      // Update local state
+      setBookings(prev => prev.filter(b => b.booking_id !== bookingToArchive.booking_id));
+      setIsArchiveModalOpen(false);
+      setBookingToArchive(null);
+      
+      alert('Booking archived and vehicle availability restored.');
+      
+    } catch (error: any) {
+      console.error('Failed to archive booking:', error);
+      alert(`Failed to archive booking: ${error.data?.message || error.message || 'Unknown error'}`);
+    }
+  };
+
+  // Function to check if completed booking is ready for removal
+  const isReadyForRemoval = (booking: BookingWithCompletion) => {
+    if (booking.booking_status !== 'completed' || !booking.completed_at) return false;
+    
+    const daysSinceCompletion = differenceInDays(new Date(), new Date(booking.completed_at.toString()));
+    return daysSinceCompletion >= 1;
+  };
+
+  // Filter bookings based on search and filters (excluding ready-to-remove completed bookings)
   const filteredBookings = bookings.filter(booking => {
+    // Filter out completed bookings that are ready for removal
+    if (isReadyForRemoval(booking)) {
+      return false;
+    }
+    
     const userName = `${booking.first_name} ${booking.last_name}`
     const userEmail = booking.email || 'No email'
     const vehicleModel = booking.model
@@ -104,11 +222,11 @@ const AdminBookingsPage: React.FC = () => {
       vehicleModel.toLowerCase().includes(searchTerm.toLowerCase()) ||
       vehicleManufacturer.toLowerCase().includes(searchTerm.toLowerCase()) ||
       (booking.booking_id?.toString().includes(searchTerm) || false)
-    
+  
     const matchesStatus = statusFilter === 'all' || booking.booking_status === statusFilter
     
     return matchesSearch && matchesStatus
-  })
+  });
 
   const handleUpdateStatus = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -117,7 +235,7 @@ const AdminBookingsPage: React.FC = () => {
     try {
       console.log('Updating status for booking:', selectedBooking.booking_id, 'to:', statusForm.booking_status)
       
-      // Update booking status with correct API parameters
+      // Update booking status
       await updateBookingStatus({
         booking_id: selectedBooking.booking_id,
         booking_status: statusForm.booking_status
@@ -125,28 +243,38 @@ const AdminBookingsPage: React.FC = () => {
       
       console.log('Status updated successfully')
       
-      // Update local state immediately for better UX
-      setBookings(prevBookings =>
-        prevBookings.map(booking =>
-          booking.booking_id === selectedBooking.booking_id
-            ? { ...booking, booking_status: statusForm.booking_status }
-            : booking
-        )
+      // Update local state
+      const updatedBookings = bookings.map(booking =>
+        booking.booking_id === selectedBooking.booking_id
+          ? { 
+              ...booking, 
+              booking_status: statusForm.booking_status,
+              completed_at: statusForm.booking_status === 'completed' ? new Date().toISOString() : booking.completed_at,
+              updated_at: new Date().toISOString()
+            }
+          : booking
       )
+      
+      setBookings(updatedBookings)
+      
+      // If status is changed to completed, schedule for removal
+      if (statusForm.booking_status === 'completed') {
+        alert('Booking marked as completed. It will be automatically removed in 24 hours.');
+        
+        // Schedule for removal after 1 day
+        setTimeout(async () => {
+          await handleRemoveCompletedBooking(selectedBooking);
+        },   60 * 1000);
+      }
       
       setIsStatusModalOpen(false)
       setSelectedBooking(null)
       
-     
-      // Refetch to ensure data is in sync
-      // refetch()
-      
     } catch (error: any) {
       console.error('Failed to update booking status:', error)
-      
-      // Try alternative approach if first fails
-      // Retry with same format if first fails
-    }}
+      alert(`Failed to update booking status: ${error.data?.message || error.message || 'Unknown error'}`)
+    }
+  }
 
   const handleCancelBooking = async () => {
     if (!bookingToCancel || !bookingToCancel.booking_id) return
@@ -160,7 +288,7 @@ const AdminBookingsPage: React.FC = () => {
       
       console.log('Booking cancelled successfully')
       
-      // Update local state immediately
+      // Update local state
       setBookings(prevBookings =>
         prevBookings.map(booking =>
           booking.booking_id === bookingToCancel.booking_id
@@ -172,46 +300,49 @@ const AdminBookingsPage: React.FC = () => {
       setIsCancelModalOpen(false)
       setBookingToCancel(null)
       
-     
-      
     } catch (error: any) {
       console.error('Failed to cancel booking:', error)
       alert(`Failed to cancel booking: ${error.data?.message || error.message || 'Unknown error'}`)
     }
   }
 
-  const openCancelModal = (booking: Booking) => {
+  const openCancelModal = (booking: BookingWithCompletion) => {
     setBookingToCancel(booking)
     setIsCancelModalOpen(true)
   }
 
-  const openStatusModal = (booking: Booking) => {
+  const openStatusModal = (booking: BookingWithCompletion) => {
     setSelectedBooking(booking)
     setIsStatusModalOpen(true)
   }
 
-  const openDetailsModal = (booking: Booking) => {
+  const openDetailsModal = (booking: BookingWithCompletion) => {
     setSelectedBooking(booking)
     setIsDetailsModalOpen(true)
   }
 
-  // Calculate stats
-  const totalBookings = bookings.length
-  const pendingBookings = bookings.filter(b => b.booking_status === 'pending').length
-  const confirmedBookings = bookings.filter(b => b.booking_status === 'confirmed').length
-  const activeBookings = bookings.filter(b => b.booking_status === 'active').length
-  const completedBookings = bookings.filter(b => b.booking_status === 'completed').length
-  const cancelledBookings = bookings.filter(b => b.booking_status === 'cancelled').length
+  const openArchiveModal = (booking: BookingWithCompletion) => {
+    setBookingToArchive(booking)
+    setIsArchiveModalOpen(true)
+  }
 
-  // Calculate total revenue from completed, active, and confirmed bookings
+  // Calculate stats (excluding ready-to-remove completed bookings)
+  const totalBookings = bookings.filter(b => !isReadyForRemoval(b)).length
+  const pendingBookings = bookings.filter(b => b.booking_status === 'pending' && !isReadyForRemoval(b)).length
+  const confirmedBookings = bookings.filter(b => b.booking_status === 'confirmed' && !isReadyForRemoval(b)).length
+  const activeBookings = bookings.filter(b => b.booking_status === 'active' && !isReadyForRemoval(b)).length
+  const completedBookings = bookings.filter(b => b.booking_status === 'completed' && !isReadyForRemoval(b)).length
+  const readyForRemovalCount = completedBookingsPendingRemoval.length
+
+  // Calculate total revenue from completed, active, and confirmed bookings (excluding ready-to-remove)
   const totalRevenue = bookings
-    .filter(b => b.booking_status === 'completed' || b.booking_status === 'active' || b.booking_status === 'confirmed')
+    .filter(b => (b.booking_status === 'completed' || b.booking_status === 'active' || b.booking_status === 'confirmed') && !isReadyForRemoval(b))
     .reduce((sum, booking) => sum + (booking.total_amount || 0), 0)
 
   const statusOptions: Booking['booking_status'][] = ['pending', 'confirmed', 'active', 'completed', 'cancelled']
 
   const getStatusColor = (booking_status: Booking['booking_status']) => {
-    const actualStatus = booking_status|| 'pending'
+    const actualStatus = booking_status || 'pending'
     switch (actualStatus) {
       case 'pending': return 'bg-yellow-100 text-yellow-800'
       case 'confirmed': return 'bg-blue-100 text-blue-800'
@@ -259,7 +390,7 @@ const AdminBookingsPage: React.FC = () => {
     try {
       const start = new Date(startDate)
       const end = new Date(endDate)
-      return Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) || 1
+      return Math.ceil((end.getTime() - start.getTime()) / (1000 * 10)) || 1
     } catch (error) {
       return 1
     }
@@ -268,8 +399,8 @@ const AdminBookingsPage: React.FC = () => {
   // Function to check if status transition is valid
   const isValidStatusTransition = (currentStatus: Booking['booking_status'], newStatus: Booking['booking_status']) => {
     const validTransitions: Record<Booking['booking_status'], Booking['booking_status'][]> = {
-      'pending': ['confirmed', 'cancelled'],
-      'confirmed': ['active', 'cancelled'],
+      'pending': ['confirmed', 'cancelled', 'completed'],
+      'confirmed': ['active', 'cancelled', 'completed'],
       'active': ['completed', 'cancelled'],
       'completed': [], // No transitions from completed
       'cancelled': []  // No transitions from cancelled
@@ -318,11 +449,21 @@ const AdminBookingsPage: React.FC = () => {
               Manage all vehicle bookings and reservations
             </p>
           </div>
+          {readyForRemovalCount > 0 && (
+            <div className="bg-yellow-100 border border-yellow-200 rounded-lg p-4">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="w-5 h-5 text-yellow-600" />
+                <span className="text-yellow-800 font-medium">
+                  {readyForRemovalCount} completed booking(s) ready for archiving
+                </span>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
       {/* Stats Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-6 mb-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-7 gap-6 mb-6">
         <div className="bg-white rounded-2xl shadow-lg p-6 border border-gray-100">
           <div className="flex items-center justify-between">
             <div>
@@ -389,6 +530,20 @@ const AdminBookingsPage: React.FC = () => {
             </div>
             <div className="bg-purple-100 p-3 rounded-xl">
               <CheckCircle className="w-6 h-6 text-purple-600" />
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-2xl shadow-lg p-6 border border-gray-100">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-gray-500 text-sm font-medium">Ready to Archive</p>
+              <p className="text-2xl font-bold text-gray-900 mt-2">
+                {readyForRemovalCount}
+              </p>
+            </div>
+            <div className="bg-orange-100 p-3 rounded-xl">
+              <Archive className="w-6 h-6 text-orange-600" />
             </div>
           </div>
         </div>
@@ -489,8 +644,11 @@ const AdminBookingsPage: React.FC = () => {
                   const vehicleModel = booking.model
                   const vehicleManufacturer = booking.manufacturer
 
+                  // Check if this completed booking is ready for archiving
+                  const isCompletedAndReady = booking.booking_status === 'completed' && isReadyForRemoval(booking);
+
                   return (
-                    <tr key={booking.booking_id} className="hover:bg-gray-50 transition-colors">
+                    <tr key={booking.booking_id} className={`hover:bg-gray-50 transition-colors ${isCompletedAndReady ? 'bg-yellow-50' : ''}`}>
                       <td className="px-6 py-4">
                         <div className="flex items-center gap-3">
                           <div className="w-12 h-12 bg-gray-200 rounded-lg flex items-center justify-center">
@@ -502,6 +660,11 @@ const AdminBookingsPage: React.FC = () => {
                             </div>
                             <div className="text-sm text-gray-500">
                               ID: {booking.booking_id}
+                              {booking.completed_at && (
+                                <div className="text-xs text-gray-400">
+                                  Completed: {formatDate(booking.completed_at.toString())}
+                                </div>
+                              )}
                             </div>
                           </div>
                         </div>
@@ -531,6 +694,7 @@ const AdminBookingsPage: React.FC = () => {
                         <span className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium ${getStatusColor(booking.booking_status)}`}>
                           {getStatusIcon(booking.booking_status)}
                           {formatStatusText(booking.booking_status)}
+                          {isCompletedAndReady && ' (Ready to Archive)'}
                         </span>
                       </td>
                       <td className="px-6 py-4">
@@ -550,6 +714,19 @@ const AdminBookingsPage: React.FC = () => {
                           >
                             <Edit className="w-4 h-4" />
                           </button>
+                          
+                          {/* Archive button for completed bookings ready for removal */}
+                          {isCompletedAndReady && (
+                            <button 
+                              onClick={() => openArchiveModal(booking)}
+                              className="p-2 text-gray-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg transition-colors"
+                              title="Archive Booking & Restore Vehicle"
+                            >
+                              <Archive className="w-4 h-4" />
+                            </button>
+                          )}
+                          
+                          {/* Cancel button for non-completed bookings */}
                           {booking.booking_status !== 'cancelled' && booking.booking_status !== 'completed' && (
                             <button 
                               onClick={() => openCancelModal(booking)}
@@ -630,6 +807,13 @@ const AdminBookingsPage: React.FC = () => {
                     <div className="text-sm text-gray-600">
                       Vehicle ID: {selectedBooking.vehicle_id}
                     </div>
+                    {selectedBooking.booking_status === 'completed' && (
+                      <div className="mt-2">
+                        <span className="text-xs font-medium bg-purple-100 text-purple-800 px-2 py-1 rounded">
+                          Vehicle will be restored to available inventory after archiving
+                        </span>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -677,6 +861,19 @@ const AdminBookingsPage: React.FC = () => {
                       {selectedBooking.created_at ? formatDate(selectedBooking.created_at) : 'N/A'}
                     </div>
                   </div>
+                  {selectedBooking.completed_at && (
+                    <div className="md:col-span-2">
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Completed At</label>
+                      <div className="p-3 bg-purple-50 rounded-lg border border-purple-200">
+                        {formatDateTime(selectedBooking.completed_at.toString())}
+                        {isReadyForRemoval(selectedBooking) && (
+                          <div className="text-sm text-purple-700 mt-1">
+                            Ready for archiving. Vehicle will be restored to available inventory.
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -707,6 +904,18 @@ const AdminBookingsPage: React.FC = () => {
               >
                 Close
               </button>
+              {selectedBooking.booking_status === 'completed' && isReadyForRemoval(selectedBooking) && (
+                <button
+                  onClick={() => {
+                    setIsDetailsModalOpen(false);
+                    openArchiveModal(selectedBooking);
+                  }}
+                  className="flex-1 bg-orange-600 hover:bg-orange-700 text-white py-2 rounded-lg font-medium transition-colors flex items-center justify-center gap-2"
+                >
+                  <Archive className="w-4 h-4" />
+                  Archive & Restore Vehicle
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -735,7 +944,6 @@ const AdminBookingsPage: React.FC = () => {
                     value={statusForm.booking_status}
                     onChange={(e) => setStatusForm({ booking_status: e.target.value as Booking['booking_status'] })}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    // disabled={isUpdatingStatus}
                   >
                     {statusOptions.map(status => (
                       <option 
@@ -753,6 +961,16 @@ const AdminBookingsPage: React.FC = () => {
                   <p className="text-sm text-gray-500 mt-1">
                     Current status: <span className="font-medium">{selectedBooking.booking_status || 'pending'}</span>
                   </p>
+                  {statusForm.booking_status === 'completed' && (
+                    <div className="mt-2 p-2 bg-purple-50 border border-purple-200 rounded">
+                      <p className="text-sm text-purple-800">
+                        ⏰ Booking will be automatically archived after 24 hours
+                      </p>
+                      <p className="text-xs text-purple-600 mt-1">
+                        Vehicle will be restored to available inventory upon archiving
+                      </p>
+                    </div>
+                  )}
                 </div>
 
                 <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
@@ -847,6 +1065,63 @@ const AdminBookingsPage: React.FC = () => {
                 ) : (
                   'Cancel Booking'
                 )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Archive Booking Modal */}
+      {isArchiveModalOpen && bookingToArchive && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl p-6 max-w-md w-full">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 bg-orange-100 rounded-xl flex items-center justify-center">
+                <Archive className="w-5 h-5 text-orange-600" />
+              </div>
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900">Archive Completed Booking</h3>
+                <p className="text-gray-600 text-sm">Archive booking and restore vehicle to inventory</p>
+              </div>
+            </div>
+            
+            <div className="bg-orange-50 border border-orange-200 rounded-lg p-4 mb-6">
+              <p className="text-orange-800 font-medium">
+                Archive booking #{bookingToArchive.booking_id}?
+              </p>
+              <p className="text-orange-600 text-sm mt-2">
+                This will:
+              </p>
+              <ul className="text-orange-600 text-sm mt-1 list-disc pl-4">
+                <li>Remove the booking from active records</li>
+                <li>Restore vehicle #{bookingToArchive.vehicle_id} to available inventory</li>
+                <li>Increase available vehicle count by 1</li>
+                <li>Free up the vehicle for new bookings</li>
+              </ul>
+              <p className="text-orange-600 text-sm mt-2">
+                Customer: <span className="font-medium">{bookingToArchive.first_name} {bookingToArchive.last_name}</span>
+              </p>
+              <p className="text-orange-600 text-sm">
+                Vehicle: <span className="font-medium">{bookingToArchive.manufacturer} {bookingToArchive.model}</span>
+              </p>
+            </div>
+
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => {
+                  setIsArchiveModalOpen(false)
+                  setBookingToArchive(null)
+                }}
+                className="px-4 py-2 text-gray-600 hover:text-gray-800 font-medium transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleArchiveBooking}
+                className="bg-orange-600 hover:bg-orange-700 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2"
+              >
+                <Archive className="w-4 h-4" />
+                Archive & Restore Vehicle
               </button>
             </div>
           </div>

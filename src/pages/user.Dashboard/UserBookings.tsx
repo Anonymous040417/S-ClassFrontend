@@ -16,19 +16,41 @@ import {
   XCircle as CloseIcon,
   RefreshCw
 } from 'lucide-react'
+import { toast } from 'sonner' // Add toast notifications
 import { BookingApi } from '../../features/api/BookingsApi'
-import { usersApi } from '../../features/api/UserAPi' // Add this import
+import { usersApi } from '../../features/api/UserAPi'
 import { 
   useGetAllPaymentsQuery,
   useProcessMpesaPaymentMutation,
   useCreateNewPaymentMutation,
   useGetPaymentsByBookingIdQuery
 } from '../../features/api/PaymentApi'
-import type { Booking, Payment, User as UserType } from '../../types/Types' // Update import
+import type { Booking, Payment, User as UserType } from '../../types/Types'
 import { useSelector } from 'react-redux'
 import type { RootState } from '../../store/store'
 import { skipToken } from '@reduxjs/toolkit/query'
 import DashboardLayout from '../../Dashboard.designs/DashboardLayout'
+
+// Import or define PaystackPaymentModal component
+import PaystackPaymentModal from '../../components/PayStackModal' // Adjust path as needed
+
+// Define PaystackPaymentModal props interface if not importing
+interface PaystackPaymentModalProps {
+  booking: any;
+  user: any;
+  phone: string;
+  setPhone: (phone: string) => void;
+  paymentMethod: 'mpesa' | 'card';
+  setPaymentMethod: (method: 'mpesa' | 'card') => void;
+  onSuccess: (reference: string) => void;
+  onClose: () => void;
+}
+
+declare global {
+  interface Window {
+    PaystackPop: any;
+  }
+}
 
 const UserBookingsPage: React.FC = () => {
   const { isAuthenticated, user: currentUser } = useSelector((state: RootState) => state.authSlice) as { isAuthenticated: boolean; user: any };
@@ -56,15 +78,22 @@ const UserBookingsPage: React.FC = () => {
   const [selectedBooking, setSelectedBooking] = useState<Booking | null>(null)
   const [isDetailsModalOpen, setIsDetailsModalOpen] = useState(false)
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false)
+  const [isPaystackModalOpen, setIsPaystackModalOpen] = useState(false) // New state for Paystack modal
   const [bookings, setBookings] = useState<Booking[]>([])
   const [isRefreshing, setIsRefreshing] = useState(false)
-  const [usersMap, setUsersMap] = useState<Map<number, UserType>>(new Map()) // Add users map
+  const [usersMap, setUsersMap] = useState<Map<number, UserType>>(new Map())
 
-  // Payment form state
+  // Payment form state (for legacy payment methods)
   const [paymentForm, setPaymentForm] = useState({
     phone_number: '',
     payment_method: 'mpesa' as 'mpesa' | 'card' | 'cash',
     amount: 0
+  })
+
+  // Paystack payment state
+  const [paystackPaymentData, setPaystackPaymentData] = useState({
+    phone: '',
+    paymentMethod: 'mpesa' as 'mpesa' | 'card'
   })
 
   // Combine loading states
@@ -87,12 +116,10 @@ const UserBookingsPage: React.FC = () => {
   const extractPaymentsArray = (paymentsData: any): Payment[] => {
     if (!paymentsData) return [];
     
-    // If it's already an array, return it
     if (Array.isArray(paymentsData)) {
       return paymentsData;
     }
     
-    // If it's an object with a data property that's an array
     if (paymentsData && typeof paymentsData === 'object') {
       if (Array.isArray(paymentsData.data)) {
         return paymentsData.data;
@@ -105,7 +132,6 @@ const UserBookingsPage: React.FC = () => {
       }
     }
     
-    // If we can't find an array, log warning and return empty array
     console.warn('Unexpected payments data structure:', paymentsData);
     return [];
   };
@@ -116,7 +142,6 @@ const UserBookingsPage: React.FC = () => {
     
     if (!paymentsArray || paymentsArray.length === 0) return [];
     
-    // Filter payments by booking_id
     return paymentsArray.filter(payment => 
       payment.booking_id === bookingId
     );
@@ -127,7 +152,6 @@ const UserBookingsPage: React.FC = () => {
     if (apiResponse) {
       let bookingsArray: any[] = [];
       
-      // Extract bookings array from API response
       if (Array.isArray(apiResponse)) {
         bookingsArray = apiResponse;
       } else if (apiResponse && typeof apiResponse === 'object') {
@@ -145,12 +169,9 @@ const UserBookingsPage: React.FC = () => {
         bookingsArray = [];
       }
 
-      // Enhance bookings with user information and payments data
       const enrichedBookings: Booking[] = bookingsArray.map((booking: any) => {
-        // Try to get user information from various sources
         let userInfo: UserType;
         
-        // Option 1: Check if booking has user object directly
         if (booking.user && typeof booking.user === 'object') {
           userInfo = {
             user_id: booking.user.user_id || booking.user_id || 0,
@@ -163,11 +184,9 @@ const UserBookingsPage: React.FC = () => {
             updated_at: booking.user.updated_at || new Date().toISOString()
           };
         }
-        // Option 2: Check usersMap using user_id from booking
         else if (booking.user_id && usersMap.has(booking.user_id)) {
           userInfo = usersMap.get(booking.user_id)!;
         }
-        // Option 3: Use current logged in user info (since this is user bookings page)
         else if (currentUser && booking.user_id === currentUser.user_id) {
           userInfo = {
             user_id: currentUser.user_id || 0,
@@ -180,7 +199,6 @@ const UserBookingsPage: React.FC = () => {
             updated_at: currentUser.updated_at || new Date().toISOString()
           };
         }
-        // Option 4: Create placeholder (last resort)
         else {
           userInfo = {
             user_id: booking.user_id || 0,
@@ -194,17 +212,14 @@ const UserBookingsPage: React.FC = () => {
           };
         }
 
-        // Get payments for this booking
         const bookingPayments = getPaymentsForBooking(booking.booking_id);
         
-        // Sort payments by date (newest first)
         const sortedPayments = [...bookingPayments].sort((a, b) => {
           const dateA = new Date(a.created_at || 0).getTime();
           const dateB = new Date(b.created_at || 0).getTime();
           return dateB - dateA;
         });
 
-        // Create enriched booking object
         const enrichedBooking: Booking = {
           ...booking,
           user_id: userInfo.user_id,
@@ -223,7 +238,6 @@ const UserBookingsPage: React.FC = () => {
           rental_rate: booking.rental_rate || 0,
           total_amount: booking.total_amount || 0,
           payments: sortedPayments.length > 0 ? sortedPayments : (booking.payments || []),
-          // Store the full user object if needed
           user: userInfo
         };
 
@@ -245,6 +259,12 @@ const UserBookingsPage: React.FC = () => {
         payment_method: 'mpesa',
         amount: totalAmount
       })
+      
+      // Initialize Paystack payment data
+      setPaystackPaymentData({
+        phone: selectedBooking.phone || currentUser?.phone || currentUser?.contact_phone || '',
+        paymentMethod: 'mpesa'
+      })
     }
   }, [selectedBooking, currentUser])
 
@@ -258,6 +278,11 @@ const UserBookingsPage: React.FC = () => {
     setIsPaymentModalOpen(true)
   }
 
+  const openPaystackModal = (booking: Booking) => {
+    setSelectedBooking(booking)
+    setIsPaystackModalOpen(true)
+  }
+
   const handleRefresh = async () => {
     setIsRefreshing(true);
     try {
@@ -265,20 +290,23 @@ const UserBookingsPage: React.FC = () => {
         refetchBookings(),
         refetchPayments()
       ]);
+      toast.success('Bookings refreshed successfully');
     } catch (error) {
       console.error('Failed to refresh:', error);
+      toast.error('Failed to refresh bookings');
     } finally {
       setIsRefreshing(false);
     }
   }
 
+  // Legacy payment handlers (kept for backward compatibility)
   const handleMpesaPayment = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!selectedBooking || !selectedBooking.booking_id) return
 
     try {
       const result = await processMpesaPayment({
-        phone_number: paymentForm.phone_number.replace(/^0/, '254'), // Convert to international format
+        phone_number: paymentForm.phone_number.replace(/^0/, '254'),
         amount: paymentForm.amount,
         booking_id: selectedBooking.booking_id
       }).unwrap()
@@ -286,10 +314,8 @@ const UserBookingsPage: React.FC = () => {
       setIsPaymentModalOpen(false)
       setSelectedBooking(null)
       
-      // Show success message
-      alert(result.message || 'Payment initiated successfully! Please check your phone to complete the payment.')
+      toast.success(result.message || 'Payment initiated successfully! Please check your phone to complete the payment.')
       
-      // Refresh data after a short delay
       setTimeout(() => {
         handleRefresh();
       }, 2000);
@@ -297,11 +323,10 @@ const UserBookingsPage: React.FC = () => {
     } catch (error: any) {
       console.error('Failed to process payment:', error)
       
-      // Show specific error message
       const errorMessage = error?.data?.message || 
                           error?.error || 
                           'Payment failed. Please try again.'
-      alert(`Payment Error: ${errorMessage}`)
+      toast.error(`Payment Error: ${errorMessage}`)
     }
   }
 
@@ -324,9 +349,8 @@ const UserBookingsPage: React.FC = () => {
       setIsPaymentModalOpen(false)
       setSelectedBooking(null)
       
-      alert(result.message || 'Payment recorded successfully! Our team will contact you to complete the payment.')
+      toast.success(result.message || 'Payment recorded successfully! Our team will contact you to complete the payment.')
       
-      // Refresh data
       handleRefresh();
       
     } catch (error: any) {
@@ -335,16 +359,42 @@ const UserBookingsPage: React.FC = () => {
       const errorMessage = error?.data?.message || 
                           error?.error || 
                           'Payment recording failed. Please try again.'
-      alert(`Payment Error: ${errorMessage}`)
+      toast.error(`Payment Error: ${errorMessage}`)
     }
   }
 
-  const handlePayment = (e: React.FormEvent) => {
+  const handleLegacyPayment = (e: React.FormEvent) => {
     if (paymentForm.payment_method === 'mpesa') {
       return handleMpesaPayment(e)
     } else {
       return handleOtherPayment(e)
     }
+  }
+
+  // Paystack success handler
+  const handlePaystackSuccess = (reference: string) => {
+    toast.success('Payment completed successfully!', {
+      description: `Reference: ${reference}. Updating booking status...`,
+      duration: 5000,
+    });
+    
+    // Refresh data after payment
+    setTimeout(() => {
+      handleRefresh();
+    }, 2000);
+    
+    // Close modal
+    setIsPaystackModalOpen(false);
+    setSelectedBooking(null);
+  }
+
+  // Function to handle payment button click
+  const handlePaymentClick = (booking: Booking) => {
+    // Use Paystack for all payments (recommended approach)
+    openPaystackModal(booking);
+    
+    // Alternatively, you could show a modal to choose payment method
+    // For now, we'll always use Paystack for better user experience
   }
 
   const getStatusColor = (status: Booking['booking_status'] | null) => {
@@ -397,7 +447,7 @@ const UserBookingsPage: React.FC = () => {
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat('en-US', {
       style: 'currency',
-      currency: 'USD',
+      currency: 'KES', // Changed to KES for Paystack
       minimumFractionDigits: 0,
       maximumFractionDigits: 0
     }).format(amount)
@@ -429,11 +479,11 @@ const UserBookingsPage: React.FC = () => {
       }
     }
     
-    // Get the latest payment
     const latestPayment = payments[0];
     
     switch (latestPayment.payment_status) {
       case 'completed':
+      case 'paid': // Added 'paid' status for Paystack
         return { 
           status: 'paid', 
           payment: latestPayment, 
@@ -633,22 +683,18 @@ const UserBookingsPage: React.FC = () => {
                         <Eye className="w-4 h-4" />
                         Details
                       </button>
-                      {paymentInfo.status === 'unpaid' && booking.booking_status !== 'cancelled' && (
+                      {(paymentInfo.status === 'unpaid' || paymentInfo.status === 'failed') && 
+                       booking.booking_status !== 'cancelled' && (
                         <button 
-                          onClick={() => openPaymentModal(booking)}
-                          className="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-2 rounded-lg font-medium transition-colors flex items-center justify-center gap-2"
+                          onClick={() => handlePaymentClick(booking)}
+                          className={`flex-1 ${
+                            paymentInfo.status === 'failed' 
+                              ? 'bg-red-600 hover:bg-red-700' 
+                              : 'bg-blue-600 hover:bg-blue-700'
+                          } text-white py-2 rounded-lg font-medium transition-colors flex items-center justify-center gap-2`}
                         >
                           <DollarSign className="w-4 h-4" />
-                          Pay
-                        </button>
-                      )}
-                      {paymentInfo.status === 'failed' && booking.booking_status !== 'cancelled' && (
-                        <button 
-                          onClick={() => openPaymentModal(booking)}
-                          className="flex-1 bg-red-600 hover:bg-red-700 text-white py-2 rounded-lg font-medium transition-colors flex items-center justify-center gap-2"
-                        >
-                          <DollarSign className="w-4 h-4" />
-                          Retry Payment
+                          {paymentInfo.status === 'failed' ? 'Retry Payment' : 'Pay Now'}
                         </button>
                       )}
                     </div>
@@ -712,7 +758,7 @@ const UserBookingsPage: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Customer Information (User's own info) */}
+                {/* Customer Information */}
                 <div>
                   <h4 className="font-semibold text-gray-900 mb-4 flex items-center gap-2">
                     <User className="w-5 h-5" />
@@ -869,26 +915,21 @@ const UserBookingsPage: React.FC = () => {
                 >
                   Close
                 </button>
-                {getPaymentDetails(selectedBooking).status === 'unpaid' && selectedBooking.booking_status !== 'cancelled' && (
+                {(getPaymentDetails(selectedBooking).status === 'unpaid' || 
+                  getPaymentDetails(selectedBooking).status === 'failed') && 
+                  selectedBooking.booking_status !== 'cancelled' && (
                   <button
                     onClick={() => {
-                      setIsDetailsModalOpen(false)
-                      openPaymentModal(selectedBooking)
+                      setIsDetailsModalOpen(false);
+                      handlePaymentClick(selectedBooking);
                     }}
-                    className="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-2 rounded-lg font-medium transition-colors"
+                    className={`flex-1 ${
+                      getPaymentDetails(selectedBooking).status === 'failed' 
+                        ? 'bg-red-600 hover:bg-red-700' 
+                        : 'bg-blue-600 hover:bg-blue-700'
+                    } text-white py-2 rounded-lg font-medium transition-colors`}
                   >
-                    Make Payment
-                  </button>
-                )}
-                {getPaymentDetails(selectedBooking).status === 'failed' && selectedBooking.booking_status !== 'cancelled' && (
-                  <button
-                    onClick={() => {
-                      setIsDetailsModalOpen(false)
-                      openPaymentModal(selectedBooking)
-                    }}
-                    className="flex-1 bg-red-600 hover:bg-red-700 text-white py-2 rounded-lg font-medium transition-colors"
-                  >
-                    Retry Payment
+                    {getPaymentDetails(selectedBooking).status === 'failed' ? 'Retry Payment' : 'Make Payment'}
                   </button>
                 )}
               </div>
@@ -896,7 +937,7 @@ const UserBookingsPage: React.FC = () => {
           </div>
         )}
 
-        {/* Payment Modal */}
+        {/* Legacy Payment Modal (kept for backward compatibility) */}
         {isPaymentModalOpen && selectedBooking && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
             <div className="bg-white rounded-2xl p-6 max-w-md w-full">
@@ -910,7 +951,7 @@ const UserBookingsPage: React.FC = () => {
                 </button>
               </div>
 
-              <form onSubmit={handlePayment}>
+              <form onSubmit={handleLegacyPayment}>
                 <div className="space-y-4">
                   {/* Booking Summary */}
                   <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
@@ -1060,6 +1101,30 @@ const UserBookingsPage: React.FC = () => {
               </form>
             </div>
           </div>
+        )}
+
+        {/* Paystack Payment Modal */}
+        {isPaystackModalOpen && selectedBooking && currentUser && (
+          <PaystackPaymentModal
+            booking={{
+              ...selectedBooking,
+              booking_id: selectedBooking.booking_id || '',
+              total_amount: calculateTotalAmount(selectedBooking),
+              manufacturer: selectedBooking.manufacturer || '',
+              model: selectedBooking.model || '',
+              vehicle_id: selectedBooking.vehicle_id || 0
+            }}
+            user={currentUser}
+            phone={paystackPaymentData.phone}
+            setPhone={(phone:any ) => setPaystackPaymentData({...paystackPaymentData, phone})}
+            paymentMethod={paystackPaymentData.paymentMethod}
+            setPaymentMethod={(method:any) => setPaystackPaymentData({...paystackPaymentData, paymentMethod: method})}
+            onSuccess={handlePaystackSuccess}
+            onClose={() => {
+              setIsPaystackModalOpen(false);
+              setSelectedBooking(null);
+            }}
+          />
         )}
       </div>
     </DashboardLayout>
