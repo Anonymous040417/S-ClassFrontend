@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 import { toast } from 'sonner';
+import { useCreateNewPaymentMutation } from '../features/api/PaymentApi';
+import { BookingApi } from '../features/api/BookingsApi';
 
 interface PaystackPaymentModalProps {
   booking: any;
@@ -31,540 +33,444 @@ const PaystackPaymentModal: React.FC<PaystackPaymentModalProps> = ({
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Use your existing mutations
+  const [createNewPayment, { isLoading: isCreatingPayment }] = useCreateNewPaymentMutation();
+  const [updateBookingStatus] = BookingApi.useUpdateBookingStatusMutation();
+
   const paystackPublicKey = import.meta.env.VITE_PAYSTACK_PUBLIC_KEY || 'pk_live_8d95593b2f58fc7f215ff7e7a518fdea0668d621';
 
-  // Helper function to get auth token
-  const getAuthToken = (): string | null => {
-    return localStorage.getItem('token') || sessionStorage.getItem('token');
-  };
-
-  // Helper function to format phone number
+  // Format phone number for M-Pesa
   const formatPhoneNumber = (phone: string): string => {
-    return phone.replace(/\D/g, '');
+    // Remove all non-digits
+    let cleaned = phone.replace(/\D/g, '');
+    
+    // If starts with 0, convert to 254
+    if (cleaned.startsWith('0')) {
+      cleaned = '254' + cleaned.substring(1);
+    }
+    
+    // If starts with +254, remove the +
+    if (cleaned.startsWith('254')) {
+      cleaned = cleaned.replace('+', '');
+    }
+    
+    // Ensure it's 12 digits (254XXXXXXXXX)
+    if (cleaned.length === 12 && cleaned.startsWith('254')) {
+      return cleaned;
+    }
+    
+    // If it's 9 digits (without 254), add it
+    if (cleaned.length === 9) {
+      return '254' + cleaned;
+    }
+    
+    return cleaned;
   };
 
-  // Helper function to generate transaction ID
-  const generateTransactionId = (): string => {
-    return `BOOK_${booking.booking_id}_${Date.now()}`;
+  // Generate transaction reference
+  const generateTransactionRef = (): string => {
+    return `BOOK-${booking.booking_id}-${Date.now()}`;
   };
 
-  // Function to validate payment input
-  const validatePaymentInput = (): boolean => {
-    if (paymentMethod === 'mpesa' && !phone) {
-      setError('Please enter your M-Pesa phone number');
-      return false;
+  // Validate input
+  const validateInput = (): boolean => {
+    if (paymentMethod === 'mpesa') {
+      if (!phone.trim()) {
+        setError('Please enter your M-Pesa phone number');
+        return false;
+      }
+      
+      const cleanedPhone = phone.replace(/\D/g, '');
+      if (!/^(\+254|0|254)[17]\d{8}$/.test(cleanedPhone)) {
+        setError('Please enter a valid Kenyan phone number (e.g., 0712345678)');
+        return false;
+      }
     }
-
-    if (paymentMethod === 'mpesa' && !/^(\+254|0)[17]\d{8}$/.test(phone.replace(/\s/g, ''))) {
-      setError('Please enter a valid Kenyan phone number (e.g., 0712345678)');
-      return false;
-    }
-
+    
     return true;
   };
 
-  // Function to find existing pending payment
-  const findExistingPendingPayment = async (bookingId: number, token: string): Promise<any | null> => {
+  // Create payment record in your database
+  const createPaymentRecord = async (transactionRef: string, status: 'pending' | 'completed' | 'failed') => {
     try {
-      const userPaymentsResponse = await fetch('http://localhost:3000/api/payments/user', {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        }
+      const paymentData = {
+        booking_id: booking.booking_id,
+        amount: booking.total_amount || calculateTotalAmount(booking),
+        currency: 'KES',
+        payment_method: paymentMethod === 'mpesa' ? 'mpesa' : 'card',
+        payment_status: status,
+        transaction_reference: transactionRef,
+        phone_number: paymentMethod === 'mpesa' ? phone : undefined,
+        user_id: user?.user_id,
+        created_at: new Date().toISOString()
+      };
+
+      const result = await createNewPayment(paymentData).unwrap();
+      return result;
+    } catch (error: any) {
+      console.error('Failed to create payment record:', error);
+      throw new Error(error?.data?.message || 'Failed to create payment record');
+    }
+  };
+
+  // Update booking status
+  const updateBookingStatusToPaid = async (bookingId: number) => {
+    try {
+      const result = await updateBookingStatus({
+        booking_id: bookingId,
+        booking_status: 'paid' // or 'confirmed' based on your API
+      }).unwrap();
+      return result;
+    } catch (error: any) {
+      console.error('Failed to update booking status:', error);
+      // Don't throw - we'll still consider payment successful
+      return null;
+    }
+  };
+
+  // Calculate total amount from booking
+  const calculateTotalAmount = (booking: any): number => {
+    if (booking.total_amount) return booking.total_amount;
+    
+    // Fallback calculation if total_amount is not available
+    const startDate = new Date(booking.booking_date);
+    const endDate = new Date(booking.return_date);
+    const days = Math.ceil((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)) || 1;
+    const dailyRate = booking.rental_rate || 0;
+    return days * dailyRate;
+  };
+
+  // Main payment handler
+  const handlePayNow = async () => {
+    if (!validateInput()) return;
+
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      // 1. Generate transaction reference
+      const transactionRef = generateTransactionRef();
+      
+      // 2. Create pending payment record
+      const processingToast = toast.loading('Initializing payment...', {
+        description: 'Please wait while we set up your payment.'
       });
 
-      if (userPaymentsResponse.ok) {
-        const userPayments = await userPaymentsResponse.json();
-        return userPayments.find((payment: any) => 
-          payment.booking_id == bookingId && 
-          payment.payment_status === 'Pending'
-        );
-      }
-    } catch (error) {
-      console.log('⚠️ Could not fetch user payments:', error);
-    }
-    return null;
-  };
+      await createPaymentRecord(transactionRef, 'pending');
+      
+      // 3. Prepare Paystack configuration
+      const config: any = {
+        key: paystackPublicKey,
+        email: user?.email || 'customer@example.com',
+        amount: Math.round(calculateTotalAmount(booking) * 100), // Convert to kobo
+        currency: 'KES',
+        ref: transactionRef,
+        metadata: {
+          booking_id: booking.booking_id,
+          customer_name: `${user?.first_name || ''} ${user?.last_name || ''}`.trim(),
+          customer_id: user?.user_id || '',
+          vehicle: `${booking.manufacturer || ''} ${booking.model || ''}`.trim(),
+          total_amount: calculateTotalAmount(booking),
+          payment_method: paymentMethod
+        },
+        callback: async (response: any) => {
+          // Payment successful
+          toast.dismiss(processingToast);
+          
+          try {
+            // Update payment record to completed
+            await createPaymentRecord(transactionRef, 'completed');
+            
+            // Update booking status
+            const bookingUpdateResult = await updateBookingStatusToPaid(booking.booking_id);
+            
+            if (bookingUpdateResult) {
+              toast.success('Payment Successful!', {
+                description: `Booking #${booking.booking_id} has been confirmed and paid.`,
+                duration: 5000,
+              });
+            } else {
+              toast.success('Payment Successful!', {
+                description: 'Payment completed. Your booking will be updated shortly.',
+                duration: 5000,
+              });
+            }
+            
+            // Call parent success callback
+            onSuccess(response.reference);
+            
+            // Close modal after delay
+            setTimeout(() => {
+              onClose();
+            }, 2000);
+            
+          } catch (updateError) {
+            console.error('Payment update failed:', updateError);
+            toast.success('Payment Completed!', {
+              description: 'Payment was successful but there was an issue updating records. Please contact support.',
+              duration: 5000,
+            });
+            
+            // Still call success callback
+            onSuccess(response.reference);
+            
+            setTimeout(() => {
+              onClose();
+            }, 2000);
+          }
+        },
+        onClose: () => {
+          // User closed the payment modal
+          toast.dismiss(processingToast);
+          
+          if (!isLoading) {
+            toast.info('Payment Cancelled', {
+              description: 'You closed the payment window.',
+              duration: 3000,
+            });
+          }
+          
+          setIsLoading(false);
+        }
+      };
 
-  // Function to update existing payment
-  const updateExistingPayment = async (paymentId: string, paymentData: any, token: string): Promise<any> => {
-    const response = await fetch(`http://localhost:3000/api/payments/${paymentId}`, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      },
-      body: JSON.stringify(paymentData)
-    });
-
-    if (!response.ok) {
-      throw new Error(`Failed to update payment: ${response.status}`);
-    }
-
-    return await response.json();
-  };
-
-  // Function to create new payment
-  const createNewPayment = async (paymentData: any, token: string): Promise<any> => {
-    const response = await fetch('http://localhost:3000/api/payments', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      },
-      body: JSON.stringify(paymentData)
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      if (response.status === 409 || errorText.includes('duplicate')) {
-        return { 
-          success: true, 
-          message: 'Payment already exists', 
-          booking_id: paymentData.booking_id 
+      // Add mobile money config for M-Pesa
+      if (paymentMethod === 'mpesa' && phone) {
+        config.channels = ['mobile_money'];
+        config.mobile_money = {
+          phone: formatPhoneNumber(phone),
+          provider: 'mpesa'
         };
       }
-      throw new Error(`Failed to create payment: ${response.status}`);
-    }
 
-    return await response.json();
-  };
-
-  // Function to find and update or create payment
-  const findAndUpdatePayment = async (paymentData: any): Promise<any> => {
-    try {
-      const token = getAuthToken();
-      if (!token) throw new Error('No authentication token found');
-
-      console.log('📋 Looking for existing payment for booking:', paymentData.booking_id);
-
-      // Try to find existing pending payment
-      const existingPayment = await findExistingPendingPayment(paymentData.booking_id, token);
-      
-      if (existingPayment) {
-        console.log('✅ Found existing pending payment to update:', existingPayment);
-        return await updateExistingPayment(existingPayment.payment_id, {
-          payment_status: 'Paid',
-          transaction_id: paymentData.transaction_id,
-          payment_method: paymentMethod === 'mpesa' ? 'M-Pesa' : 'Card',
-          paystack_response: JSON.stringify(paymentData.paystack_response),
-          updated_at: new Date().toISOString()
-        }, token);
-      }
-
-      // If no existing payment, create new one
-      console.log('➕ Creating new payment record for booking:', paymentData.booking_id);
-      return await createNewPayment(paymentData, token);
-      
-    } catch (error) {
-      console.error('❌ Error in findAndUpdatePayment:', error);
-      throw error;
-    }
-  };
-
-  // Function to update booking status
-  const updateBookingToPaid = async (bookingId: string): Promise<any> => {
-    try {
-      const token = getAuthToken();
-      if (!token) return { success: false, message: 'No auth token' };
-
-      // Try the specific status endpoint first
-      const response = await fetch(`http://localhost:3000/api/bookings/${bookingId}/status`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          booking_status: 'Paid'
-        })
-      });
-
-      if (!response.ok) {
-        // Fallback to general update endpoint
-        const generalResponse = await fetch(`http://localhost:3000/api/bookings/${bookingId}`, {
-          method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-          },
-          body: JSON.stringify({
-            booking_status: 'Paid',
-            updated_at: new Date().toISOString()
-          })
-        });
-
-        if (!generalResponse.ok) {
-          console.log('⚠️ Booking status update failed, but payment was successful');
-          return { success: false, message: 'Booking update failed but payment succeeded' };
-        }
-
-        return await generalResponse.json();
-      }
-
-      return await response.json();
-    } catch (error) {
-      console.error('❌ Error updating booking:', error);
-      return { success: false, message: 'Booking update failed but payment succeeded' };
-    }
-  };
-
-  // Function to prepare payment data
-  const preparePaymentData = (response: any) => {
-    return {
-      booking_id: parseInt(booking.booking_id),
-      amount: booking.total_amount,
-      payment_status: 'Paid',
-      payment_method: paymentMethod === 'mpesa' ? 'M-Pesa' : 'Card',
-      transaction_id: response.reference,
-      paystack_response: response,
-      user_id: user?.user_id,
-      vehicle_id: booking.vehicle_id
-    };
-  };
-
-  // Function to process payment after successful transaction
-  const processPaymentTransaction = async (response: any, transactionId: string) => {
-    try {
-      // Step 1: Prepare payment data
-      const paymentData = preparePaymentData(response);
-      console.log('📤 Processing payment data for booking:', paymentData.booking_id);
-
-      // Show processing toast
-      const processingToast = toast.loading('Updating payment record...', {
-        description: 'Processing your payment...'
-      });
-
-      // Step 2: Update or create payment record
-      const paymentResult = await findAndUpdatePayment(paymentData);
-      console.log('✅ Payment result:', paymentResult);
-      
-      // Update toast
-      toast.dismiss(processingToast);
-      toast.loading('Updating booking status...', {
-        description: 'Confirming your booking...'
-      });
-
-      // Step 3: Update booking status
-      const updateResult = await updateBookingToPaid(booking.booking_id);
-      console.log('✅ Booking update result:', updateResult);
-
-      // Step 4: Call parent success callback
-      onSuccess(response.reference);
-      
-      // Step 5: Show final success toast
-      toast.success('Payment Processed Successfully!', {
-        description: `Booking #${booking.booking_id} is now confirmed and paid`,
-        duration: 4000,
-      });
-      
-      // Step 6: Close modal
-      setTimeout(() => {
-        onClose();
-      }, 1500);
-      
-    } catch (error: any) {
-      console.error('❌ Payment processing failed:', error);
-      
-      // Even if payment record update failed, payment was successful
-      toast.success('Payment Successful!', {
-        description: 'Payment completed. Some updates may be pending.',
-        duration: 5000,
-      });
-      
-      // Still call success callback
-      onSuccess(transactionId);
-      
-      // Close modal after delay
-      setTimeout(() => {
-        onClose();
-      }, 2000);
-    }
-  };
-
-  // Function to create Paystack configuration
-  const createPaystackConfig = (transactionId: string, callback: Function, onCloseCallback: Function) => {
-    const config: any = {
-      key: paystackPublicKey,
-      email: user?.email || 'customer@example.com',
-      amount: Math.round(booking.total_amount * 100), // Convert to kobo
-      currency: 'KES',
-      ref: transactionId,
-      metadata: {
-        booking_id: booking.booking_id,
-        customer_name: user?.first_name || user?.name || '',
-        customer_id: user?.user_id || '',
-        vehicle: `${booking.manufacturer} ${booking.model}`,
-        total_amount: booking.total_amount,
-        booking_status: 'Pending'
-      },
-      callback,
-      onClose: onCloseCallback,
-    };
-
-    // Add mobile money config for M-Pesa
-    if (paymentMethod === 'mpesa' && phone) {
-      config.channels = ['mobile_money'];
-      config.mobile_money = {
-        phone: formatPhoneNumber(phone),
-        provider: 'mpesa'
-      };
-    }
-
-    return config;
-  };
-
-  // Function to initialize Paystack payment
-  const initializePaystackPayment = (config: any, loadingToastId: string) => {
-    if (window.PaystackPop) {
-      try {
+      // 4. Initialize Paystack payment
+      if (window.PaystackPop) {
         const handler = window.PaystackPop.setup(config);
         handler.openIframe();
-      } catch (err) {
-        handlePaystackError(err, loadingToastId);
-      }
-    } else {
-      loadPaystackScript(config, loadingToastId);
-    }
-  };
-
-  // Function to handle Paystack errors
-  const handlePaystackError = (err: any, loadingToastId: string) => {
-    console.error('Paystack error:', err);
-    toast.dismiss(loadingToastId);
-    toast.error('Payment Failed', {
-      description: 'Failed to initialize payment. Please try again.',
-      duration: 4000,
-    });
-    setError('Failed to initialize payment. Please try again.');
-    setIsLoading(false);
-  };
-
-  // Function to load Paystack script
-  const loadPaystackScript = (config: any, loadingToastId: string) => {
-    const script = document.createElement('script');
-    script.src = 'https://js.paystack.co/v1/inline.js';
-    script.async = true;
-    
-    script.onload = () => {
-      if (window.PaystackPop) {
-        try {
-          const handler = window.PaystackPop.setup(config);
-          handler.openIframe();
-        } catch (err) {
-          handlePaystackError(err, loadingToastId);
-        }
       } else {
-        handleScriptLoadError(loadingToastId);
+        // Load Paystack script if not available
+        const script = document.createElement('script');
+        script.src = 'https://js.paystack.co/v1/inline.js';
+        script.async = true;
+        
+        script.onload = () => {
+          if (window.PaystackPop) {
+            const handler = window.PaystackPop.setup(config);
+            handler.openIframe();
+          } else {
+            toast.error('Payment Service Unavailable', {
+              description: 'Failed to load payment service. Please refresh and try again.',
+              duration: 4000,
+            });
+            setIsLoading(false);
+          }
+        };
+        
+        script.onerror = () => {
+          toast.error('Connection Error', {
+            description: 'Failed to load payment service. Please check your internet connection.',
+            duration: 4000,
+          });
+          setIsLoading(false);
+        };
+        
+        document.head.appendChild(script);
       }
-    };
-    
-    script.onerror = () => {
-      handleScriptLoadError(loadingToastId);
-    };
-    
-    document.head.appendChild(script);
-  };
 
-  // Function to handle script load errors
-  const handleScriptLoadError = (loadingToastId: string) => {
-    toast.dismiss(loadingToastId);
-    toast.error('Connection Error', {
-      description: 'Failed to load payment service. Please check your internet.',
-      duration: 4000,
-    });
-    setError('Failed to load payment service. Please check your internet.');
-    setIsLoading(false);
-  };
-
-  // Main payment handler function
-  const handlePayNow = () => {
-    if (!validatePaymentInput()) return;
-
-    setError(null);
-    setIsLoading(true);
-
-    // Show loading toast
-    const loadingToast = toast.loading('Initializing payment...');
-
-    // Create transaction ID
-    const transactionId = generateTransactionId();
-    
-    // Define payment callback function
-    const paymentCallback = (response: any) => {
-      // Dismiss loading toast
-      toast.dismiss(loadingToast);
-      
-      console.log('Payment successful! Response:', response);
-      
-      // Show immediate success toast
-      toast.success('Payment completed! Processing...', {
-        description: 'Your payment was successful. Updating records...',
-        duration: 3000,
+    } catch (error: any) {
+      console.error('Payment initialization failed:', error);
+      setError(error.message || 'Failed to initialize payment. Please try again.');
+      toast.error('Payment Failed', {
+        description: error.message || 'Failed to initialize payment.',
+        duration: 4000,
       });
-      
-      // Process payment in background
-      processPaymentTransaction(response, transactionId);
-    };
-
-    // Define payment onClose function
-    const paymentOnClose = () => {
-      console.log('Payment modal closed by user');
-      toast.dismiss(loadingToast);
-      
-      // Only show cancellation toast if not loading (user actively closed)
-      if (!isLoading) {
-        toast.info('Payment cancelled', {
-          description: 'You closed the payment window',
-          duration: 3000,
-        });
-      }
-      
       setIsLoading(false);
-    };
-
-    // Create Paystack configuration
-    const paystackConfig = createPaystackConfig(transactionId, paymentCallback, paymentOnClose);
-
-    // Initialize Paystack payment
-    initializePaystackPayment(paystackConfig, loadingToast as any);
+    }
   };
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-lg shadow-xl max-w-md w-full max-h-[90vh] overflow-y-auto">
-        <div className="p-6">
+      <div className="bg-white rounded-xl shadow-2xl max-w-md w-full">
+        {/* Header */}
+        <div className="px-6 pt-6">
           <div className="flex justify-between items-center mb-4">
-            <h3 className="text-xl font-bold text-gray-900">Complete Payment</h3>
+            <div>
+              <h3 className="text-xl font-bold text-gray-900">Complete Payment</h3>
+              <p className="text-sm text-gray-600 mt-1">Secure payment via Paystack</p>
+            </div>
             <button
               onClick={onClose}
               disabled={isLoading}
-              className="text-gray-400 hover:text-gray-600 text-2xl disabled:opacity-50"
+              className="p-2 hover:bg-gray-100 rounded-lg transition-colors disabled:opacity-50"
             >
-              &times;
+              <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
             </button>
           </div>
+        </div>
 
-          {error && (
-            <div className="mb-4 p-3 bg-red-100 text-red-700 rounded-lg text-sm">
-              {error}
-            </div>
-          )}
-
-          <div className="mb-6">
-            <div className="bg-gray-50 p-4 rounded-lg">
-              <p className="font-medium text-gray-700">Booking Summary</p>
-              <div className="mt-2 space-y-2">
-                <div className="flex justify-between">
-                  <span className="text-sm text-gray-600">Booking ID:</span>
-                  <span className="font-medium">#{booking.booking_id}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-sm text-gray-600">Current Status:</span>
-                  <span className="font-medium text-yellow-600">Pending</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-sm text-gray-600">Vehicle:</span>
-                  <span className="font-medium">{booking.manufacturer} {booking.model}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-sm text-gray-600">Amount:</span>
-                  <span className="text-lg font-bold text-green-600">
-                    KES {booking.total_amount.toLocaleString()}
-                  </span>
-                </div>
+        {/* Error Alert */}
+        {error && (
+          <div className="mx-6 mb-4">
+            <div className="bg-red-50 border border-red-200 rounded-lg p-3">
+              <div className="flex items-center">
+                <svg className="w-5 h-5 text-red-400 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                </svg>
+                <span className="text-sm text-red-700">{error}</span>
               </div>
             </div>
           </div>
+        )}
 
-          <div className="mb-6">
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Select Payment Method
-            </label>
-            <div className="grid grid-cols-2 gap-3">
-              <button
-                onClick={() => setPaymentMethod('mpesa')}
-                disabled={isLoading}
-                className={`p-4 border-2 rounded-lg transition-all flex flex-col items-center ${
-                  paymentMethod === 'mpesa'
-                    ? 'border-blue-500 bg-blue-50'
-                    : 'border-gray-200 hover:border-gray-300'
-                } ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
-              >
-                <span className="text-2xl mb-2">📱</span>
-                <span className="font-medium">M-Pesa</span>
-                <span className="text-xs text-gray-500 mt-1">Mobile Money</span>
-              </button>
-              
-              <button
-                onClick={() => setPaymentMethod('card')}
-                disabled={isLoading}
-                className={`p-4 border-2 rounded-lg transition-all flex flex-col items-center ${
-                  paymentMethod === 'card'
-                    ? 'border-blue-500 bg-blue-50'
-                    : 'border-gray-200 hover:border-gray-300'
-                } ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
-              >
-                <span className="text-2xl mb-2">💳</span>
-                <span className="font-medium">Card</span>
-                <span className="text-xs text-gray-500 mt-1">Credit/Debit</span>
-              </button>
+        {/* Booking Summary */}
+        <div className="px-6 mb-6">
+          <div className="bg-gradient-to-r from-blue-50 to-blue-100 border border-blue-200 rounded-xl p-4">
+            <h4 className="font-semibold text-blue-900 mb-3">Booking Summary</h4>
+            <div className="space-y-2">
+              <div className="flex justify-between items-center">
+                <span className="text-sm text-blue-700">Booking ID:</span>
+                <span className="font-semibold text-blue-900">#{booking.booking_id}</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-sm text-blue-700">Vehicle:</span>
+                <span className="font-medium text-blue-900">{booking.manufacturer} {booking.model}</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-sm text-blue-700">Amount:</span>
+                <span className="text-lg font-bold text-blue-900">
+                  KES {calculateTotalAmount(booking).toLocaleString()}
+                </span>
+              </div>
             </div>
           </div>
+        </div>
 
-          {paymentMethod === 'mpesa' && (
-            <div className="mb-6">
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                M-Pesa Phone Number
-              </label>
+        {/* Payment Method Selection */}
+        <div className="px-6 mb-6">
+          <label className="block text-sm font-medium text-gray-700 mb-3">
+            Select Payment Method
+          </label>
+          <div className="grid grid-cols-2 gap-3">
+            <button
+              onClick={() => setPaymentMethod('mpesa')}
+              disabled={isLoading}
+              className={`p-4 border-2 rounded-xl transition-all duration-200 flex flex-col items-center ${
+                paymentMethod === 'mpesa'
+                  ? 'border-blue-500 bg-blue-50 shadow-sm'
+                  : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+              } ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
+            >
+              <div className={`w-10 h-10 rounded-full flex items-center justify-center mb-2 ${
+                paymentMethod === 'mpesa' ? 'bg-green-100' : 'bg-gray-100'
+              }`}>
+                <span className="text-xl">📱</span>
+              </div>
+              <span className="font-medium text-sm">M-Pesa</span>
+              <span className="text-xs text-gray-500 mt-1">Mobile Money</span>
+            </button>
+            
+            <button
+              onClick={() => setPaymentMethod('card')}
+              disabled={isLoading}
+              className={`p-4 border-2 rounded-xl transition-all duration-200 flex flex-col items-center ${
+                paymentMethod === 'card'
+                  ? 'border-blue-500 bg-blue-50 shadow-sm'
+                  : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+              } ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
+            >
+              <div className={`w-10 h-10 rounded-full flex items-center justify-center mb-2 ${
+                paymentMethod === 'card' ? 'bg-blue-100' : 'bg-gray-100'
+              }`}>
+                <span className="text-xl">💳</span>
+              </div>
+              <span className="font-medium text-sm">Card</span>
+              <span className="text-xs text-gray-500 mt-1">Credit/Debit</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Phone Input for M-Pesa */}
+        {paymentMethod === 'mpesa' && (
+          <div className="px-6 mb-6">
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              M-Pesa Phone Number
+            </label>
+            <div className="relative">
               <input
                 type="tel"
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
                 placeholder="0712 345 678"
-                className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 disabled={isLoading}
+                className="w-full px-4 py-3 pl-12 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:opacity-50 disabled:bg-gray-100"
               />
-              <p className="text-xs text-gray-500 mt-2">
-                Enter test number: 0718964629 for testing
-              </p>
+              <div className="absolute left-3 top-1/2 transform -translate-y-1/2">
+                <span className="text-gray-500">+254</span>
+              </div>
             </div>
-          )}
+            <p className="text-xs text-gray-500 mt-2">
+              Enter your M-Pesa registered phone number
+            </p>
+          </div>
+        )}
 
-          <div className="mb-6 p-3 bg-blue-50 border border-blue-200 rounded-lg">
-            <h4 className="font-medium text-blue-800 mb-1">Payment Process:</h4>
-            <ol className="text-sm text-blue-700 space-y-1 list-decimal pl-4">
+        {/* Payment Info */}
+        <div className="px-6 mb-6">
+          <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-4">
+            <h4 className="font-medium text-yellow-800 mb-2 flex items-center gap-2">
+              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+              </svg>
+              Payment Process
+            </h4>
+            <ol className="text-sm text-yellow-700 space-y-1 list-decimal pl-5">
               <li>Click "Pay Now" button</li>
-              <li>Paystack payment window will open</li>
+              <li>Payment window will open (Paystack)</li>
               <li>Complete the payment process</li>
-              <li><strong>Payment will be recorded in database</strong></li>
-              <li><strong>Booking status will update from "Pending" to "Paid"</strong></li>
-              <li>Modal will close automatically</li>
+              <li>Payment record will be created in system</li>
+              <li>Booking status will update to "Paid"</li>
             </ol>
           </div>
+        </div>
 
-          <div className="flex gap-3">
-            <button
-              onClick={handlePayNow}
-              disabled={isLoading || (paymentMethod === 'mpesa' && !phone)}
-              className={`flex-1 py-3 px-4 rounded-lg font-medium text-white transition-colors ${
-                isLoading || (paymentMethod === 'mpesa' && !phone)
-                  ? 'bg-blue-400 cursor-not-allowed'
-                  : 'bg-blue-600 hover:bg-blue-700'
-              }`}
-            >
-              {isLoading ? (
-                <span className="flex items-center justify-center">
-                  <svg className="animate-spin h-5 w-5 mr-2 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                  </svg>
-                  Processing...
-                </span>
-              ) : 'Pay Now'}
-            </button>
-          </div>
+        {/* Action Buttons */}
+        <div className="px-6 pb-6">
+          <button
+            onClick={handlePayNow}
+            disabled={isLoading || (paymentMethod === 'mpesa' && !phone.trim())}
+            className={`w-full py-3 px-4 rounded-lg font-medium transition-all duration-200 flex items-center justify-center ${
+              isLoading || (paymentMethod === 'mpesa' && !phone.trim())
+                ? 'bg-blue-400 cursor-not-allowed'
+                : 'bg-blue-600 hover:bg-blue-700 shadow-md hover:shadow-lg'
+            } text-white`}
+          >
+            {isLoading ? (
+              <>
+                <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                Processing...
+              </>
+            ) : (
+              <>
+                <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                </svg>
+                Pay Now
+              </>
+            )}
+          </button>
+          
+          <button
+            onClick={onClose}
+            disabled={isLoading}
+            className="w-full mt-3 py-2.5 px-4 rounded-lg font-medium border border-gray-300 text-gray-700 hover:bg-gray-50 transition-colors disabled:opacity-50"
+          >
+            Cancel
+          </button>
         </div>
       </div>
     </div>
